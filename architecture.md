@@ -9,14 +9,14 @@ Note that the below diagrams and text link to MTC's working versions of these mo
 * [BayAreaMetro/travel-model-two-networks, develop branch](https://github.com/BayAreaMetro/travel-model-two-networks/tree/develop)
 
 ## Overall Comments
-* I think these libraries are a great start but there are some issues that I see as being critical to fix:
-  * **Documentation** -- Whenever our staff looks at the code, we end up with *so many* questions.  We'd be happy to add answers to the documentation as we figure it out BUT they won't be useful to the greater project without
-  * **Branch housekeeping** -- There are many active branches: 
-    * [wsp-sag/network_wranger](https://github.com/wsp-sag/network_wrangler/branches): master, develop, develop_with_ranch, generric_agency
-    * [wsp-sag/Lasso](https://github.com/wsp-sag/Lasso/branches): master, develop, develop_with_ranch, generic_agency
-    * Not to mention forks which add even more versions of these branches
-    * The work to make a plan for this and execute it is likely related to the future Governance/Funding conversation
-  * **Tests** -- I think a lot of the potential for making sure these libraries work as expected with continuous development is through testing infrastructure, but this is currently [not maintained](https://travis-ci.org/github/wsp-sag/network_wrangler/branches).  See my attempt to fix tests on [wsp-sag/network_wrangler, develop branch](https://github.com/wsp-sag/network_wrangler/pull/281)
+I think these libraries are a great start but there are some issues that I see as being critical to fix:
+* **Documentation** -- Whenever our staff looks at the code, we end up with *so many* questions.  We'd be happy to add answers to the documentation as we figure it out BUT they won't be useful to the greater project without
+* **Branch housekeeping** -- There are many active branches: 
+  * [wsp-sag/network_wranger](https://github.com/wsp-sag/network_wrangler/branches): master, develop, develop_with_ranch, generric_agency
+  * [wsp-sag/Lasso](https://github.com/wsp-sag/Lasso/branches): master, develop, develop_with_ranch, generic_agency
+  * Not to mention forks which add even more versions of these branches
+  * The work to make a plan for this and execute it is likely related to the future Governance/Funding conversation
+* **Tests** -- I think a lot of the potential for making sure these libraries work as expected with continuous development is through testing infrastructure, but this is currently [not maintained](https://travis-ci.org/github/wsp-sag/network_wrangler/branches).  See my attempt to fix tests on [wsp-sag/network_wrangler, develop branch](https://github.com/wsp-sag/network_wrangler/pull/281)
 
 ## Existing Classes
 
