@@ -77,6 +77,21 @@ classDiagram
   class Scenario {
   }
   link Scenario "https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.Scenario/" "network_wrangler.Scenario"
+  
+  class Project {
+    +str project_name
+    +dict card_data
+    +DataFrame roadway_link_changes
+    +DataFrame roadway_node_changes
+    +CubeTransit transit_changes
+    +RoadwayNetwork base_roadway_network
+    +CubeTransit base_cube_transit_network
+    +CubeTransit build_cube_transit_network
+    +Parameters parameters
+    +create_project()
+    +write_project_card()
+  }
+  link Project "https://bayareametro.github.io/Lasso/_generated/lasso.Project/" "lasso.Project"
 ```
 
 ### Lasso Classes
