@@ -30,8 +30,9 @@ I think these libraries are a great start but there are some issues that I see a
 classDiagram 
 RoadwayNetwork <-- TransitNetwork
 RoadwayNetwork <|-- ModelRoadwayNetwork
-Scenario <-- RoadwayNetwork
-Scenario <-- TransitNetwork
+Scenario --> RoadwayNetwork
+Scenario --> TransitNetwork
+Scenario --o ProjectCard
 
 %% network_wrangler classes
 
@@ -76,17 +77,7 @@ Scenario <-- TransitNetwork
     +apply_all_projects()
   }
   link Scenario "https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.Scenario/" "network_wrangler.Scenario"
-  
-%% lasso classes
-
-  class ModelRoadwayNetwork {
-  }
-  link ModelRoadwayNetwork "https://bayareametro.github.io/Lasso/_generated/lasso.ModelRoadwayNetwork/#lasso.ModelRoadwayNetwork" "lasso.ModelRoadwayNetwork"
-```
-
-### Project Card and Scenario
-```mermaid
-classDiagram 
+ 
   class ProjectCard {
     +dict __dict__
     +bool valid
@@ -97,7 +88,24 @@ classDiagram
   }
   link ProjectCard "https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.ProjectCard/" "network_wrangler.ProjectCard"
   
+%% lasso classes
 
+  class ModelRoadwayNetwork {
+    +list~str~ CALCULATED_VALUES
+    +calculate_area_type()
+    +calculate_centroidconnect()
+    +calculate_county()
+    +calculate_distance()
+    +calculate_mpo()
+    +calculate_use()
+    +create_managed_lane_network()
+  }
+  link ModelRoadwayNetwork "https://bayareametro.github.io/Lasso/_generated/lasso.ModelRoadwayNetwork/#lasso.ModelRoadwayNetwork" "lasso.ModelRoadwayNetwork"
+```
+
+### Project
+```mermaid
+classDiagram
   class Project {
     +str project_name
     +dict card_data
