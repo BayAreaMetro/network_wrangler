@@ -29,6 +29,7 @@ I think these libraries are a great start but there are some issues that I see a
   * I also think the Lasso/pipeline code should be building an instance of the agency-specific **RoadwayNetwork**, to take advantage of the schema, validation, etc.
 * [**TransitNetwork**](https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.TransitNetwork/) is described simply as a "Representation of a Transit Network".  Similarly, what does this mean?  Are the required fields the same as required for the GTFS?  Are there special fare relationships on top of GTFS?
   * What's the difference between [**lasso.StandardTransit**](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/) and **TransitNetwork**?  I thought **TransitNetwork** is the "standard"?  Plus therer are a number of Cube references in this class [`calculate_cube_mode()`](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/#lasso.StandardTransit.calculate_cube_mode), [`shape_gtfs_to_cube()`](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/#lasso.StandardTransit.shape_gtfs_to_cube), [`time_to_cube_time_period()`](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/#lasso.StandardTransit.time_to_cube_time_period), [`write_as_cube_lin()`](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/#lasso.StandardTransit.write_as_cube_lin) -- so what is [**lasso.CubeTransit**](https://bayareametro.github.io/Lasso/_generated/lasso.CubeTransit/) for?
+* [**Parameters**](https://bayareametro.github.io/Lasso/_generated/lasso.Parameters/) - This class appears to encapsulate parameters that are agency-specific.  But it includes defaults which are MetCouncil-based.  Where is the agency-specific source of truth for these values?  `parameters.py` has a bunch of MTC values and MetCouncial values both embedded in it, which is messy and will get even more so as more agencies participate.  Suggest either storing these in agency-specific configuration or agency-specific subclasses.
 
 ### Basic Network Classes
 ```mermaid
@@ -119,9 +120,93 @@ Scenario --o ProjectCard
   link ModelRoadwayNetwork "https://bayareametro.github.io/Lasso/_generated/lasso.ModelRoadwayNetwork/#lasso.ModelRoadwayNetwork" "lasso.ModelRoadwayNetwork"
 ```
 
-### Project
+### Other Lasso Classes
 ```mermaid
 classDiagram
+  StandardTransit --> Parameters
+  CubeTransit --> Parameters
+  Project --> Parameters
+
+  class Parameters {
+    +dict categories
+    +dict properties_to_split
+    +str base_dir
+    +str data_file_location
+    +str settings_location
+    +str scratch_location
+    +str county_shape
+    +str county_variable_shp
+    +dict county_code_dict
+    +dict county_centroid_range_dict
+    +dict county_node_range_dict
+    +dict county_hov_node_range_dict
+    +dict county_link_range_dict
+    +list mpo_counties
+    +list taz_N_list
+    +list maz_N_list
+    +list tap_N_list
+    +dict tap_N_start
+    +str lanes_lookup_file
+    +str osm_facility_type_dict
+    +str osm_lanes_attributes
+    +str taz_shape
+    +str area_type_shape
+    +str area_type_variable_shp
+    +dict area_type_code_dict
+    +str downtown_area_type_shape
+    +int downtown_area_type
+    +int centroid_connect_lanes
+    +str osm_assgngrp_dict
+    +str mrcc_roadway_class_shape
+    +str tam_tm2_attributes
+    +str sfcta_attributes
+    +str tomtom_attributes
+    +str pems_attributes
+    +str centroid_file
+    +str widot_shst_data
+    +str centroid_connector_link_file
+    +str centroid_connector_shape_file
+    +str tap_file
+    +str tap_connector_link_file
+    +str tap_connector_shape_file
+    +str net_to_dbf_crosswalk
+    +str log_to_net_crosswalk
+    +str emme_name_crosswalk_file
+    +str mndot_count_variable_shp
+    +str widot_county_shape
+    +str mode_crosswalk_file
+    +str veh_cap_crosswalk_file
+    +str faresystem_crosswalk_file
+    +float fare_2015_to_2010_deflator
+    +str widot_count_variable_shp
+    +str net_to_dbf_crosswalk
+    +str log_to_net_crosswalk
+    +str subregion_boundary_file
+    +str subregion_boundary_id_variable
+    +list output_variables
+    +str output_link_shp
+    +str output_node_shp
+    +str output_link_csv
+    +str output_node_csv
+    +str output_link_txt
+    +str output_node_txt
+    +str output_link_header_width_txt
+    +str output_node_header_width_txt
+    +str output_cube_network_script
+    +str output_dir
+    +str output_proj
+    +str output_proj4
+    +str prj_file
+    +str wkt_projection
+    +str fare_matrix_output_variables
+    +str zones
+    +str time_period_properties_list
+    +str int_col
+    +str float_col
+    +str string_col
+  }
+  link Parameters "https://bayareametro.github.io/Lasso/_generated/lasso.Parameters/" "lasso.Parameters"
+
   class Project {
     +str project_name
     +dict card_data
@@ -136,11 +221,7 @@ classDiagram
     +write_project_card()
   }
   link Project "https://bayareametro.github.io/Lasso/_generated/lasso.Project/" "lasso.Project"
-```
 
-### Lasso Classes
-```mermaid
-classDiagram
   class StandardTransit {
    +partridge.feed feed
    +Parameters parameters
