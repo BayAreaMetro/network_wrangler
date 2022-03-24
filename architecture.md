@@ -21,13 +21,14 @@ I think these libraries are a great start but there are some issues that I see a
 
 ## Existing Classes
 
-* [*RoadwayNetwork*](https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.RoadwayNetwork/) is described simply as a "Representation of a Roadway Network".  What does this mean?  What are the required fields?  
+* [**RoadwayNetwork**](https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.RoadwayNetwork/) is described simply as a "Representation of a Roadway Network".  What does this mean?  What are the required fields?  
   * It looks like there are some schemas defined in [network_wrangler/schemas](https://github.com/BayAreaMetro/network_wrangler/tree/generic_agency/network_wrangler/schemas) which I think are interesting and potentially useful, but I am not sure if they're being used?  I think they have value, especially in validation, but would also like to see the documentation of the class reflect them to make them easier to understand and use.
-  * We think it would make sense to have agency-specific *RoadwayNetwork* subclasses with additional variables (although maybe some of these would be useful to move to the base class based on discussion); for example: county, routenum (e.g. the shield number for freeways), routedir (the signed route direction for freeways), [cntype](https://github.com/BayAreaMetro/Lasso/blob/e4888992e45a05670ca875ae6e6f6c640231beca/lasso/mtc.py#L593), additional variables related to number of lanes (e.g. from different sources, the heuristic number, etc).  Additionally, for other attributes, we might want to alter the schema to make them stronger.  For example, we might require the roadway name to be present for all links that represent physical roadways.
-  * Currently [ModelRoadwayNetwork](https://bayareametro.github.io/Lasso/_generated/lasso.ModelRoadwayNetwork/#lasso.ModelRoadwayNetwork) is a subclass of [RoadwayNetwork](https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.RoadwayNetwork/).  There are a *lot* of methods associated with this class, both in the class and as standalone methods in [Lasso's mtc.py](https://github.com/BayAreaMetro/Lasso/blob/mtc_parameters/lasso/mtc.py).  
-  * RE: Network Review: We have been [discussing](https://app.asana.com/0/12291104512575/1201917136865472/f) which version of the network would be valuable for partner agencies to review: if they are to review the standard (agency-specific) *RoadwayNetwork*, then it should have very minimal and well-documented differences from the *ModelRoadwayNetwork* -- i.e. managed lanes and centroid connectors only. Otherwise, we are not confident that the reviewed standard RoadwayNetwork is what is modeled.  I think much of the content of the current ModelRoadwayNetwork and `mtc.py` belong in an MTC subclass of the RoadwayNetwork.
-  * I also think the Lasso/pipeline code should be building an instance of the agency-specific *RoadwayNetwork*, to take advantage of the schema, validation, etc.
-
+  * We think it would make sense to have agency-specific **RoadwayNetwork** subclasses with additional variables (although maybe some of these would be useful to move to the base class based on discussion); for example: county, routenum (e.g. the shield number for freeways), routedir (the signed route direction for freeways), [cntype](https://github.com/BayAreaMetro/Lasso/blob/e4888992e45a05670ca875ae6e6f6c640231beca/lasso/mtc.py#L593), additional variables related to number of lanes (e.g. from different sources, the heuristic number, etc).  Additionally, for other attributes, we might want to alter the schema to make requirements them stronger.  For example, we might require the roadway name to be present for all links that represent physical roadways.
+  * Currently [**ModelRoadwayNetwork**](https://bayareametro.github.io/Lasso/_generated/lasso.ModelRoadwayNetwork/#lasso.ModelRoadwayNetwork) is a subclass of [RoadwayNetwork](https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.RoadwayNetwork/).  There are a *lot* of methods associated with this class, both in the class and as standalone methods in [Lasso's mtc.py](https://github.com/BayAreaMetro/Lasso/blob/mtc_parameters/lasso/mtc.py).  
+  * **RE: Network Review**: We have been [discussing](https://app.asana.com/0/12291104512575/1201917136865472/f) which version of the network would be valuable for partner agencies to review: if they are to review the standard (agency-specific) **RoadwayNetwork**, then it should have very minimal and well-documented differences from the **ModelRoadwayNetwork** -- i.e. managed lanes and centroid connectors only. Otherwise, we are not confident that the reviewed standard **RoadwayNetwork** is what is modeled.  I think much of the content of the current **ModelRoadwayNetwork** and `mtc.py` belong in an MTC subclass of the **RoadwayNetwork**.
+  * I also think the Lasso/pipeline code should be building an instance of the agency-specific **RoadwayNetwork**, to take advantage of the schema, validation, etc.
+* [**TransitNetwork**](https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.TransitNetwork/) is described simply as a "Representation of a Transit Network".  Similarly, what does this mean?  Are the required fields the same as required for the GTFS?  Are there special fare relationships on top of GTFS?
+  * What's the difference between [**lasso.StandardTransit**](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/) and **TransitNetwork**?  I thought **TransitNetwork** is the "standard"?  Plus therer are a number of Cube references in this class [`calculate_cube_mode()`](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/#lasso.StandardTransit.calculate_cube_mode), [`shape_gtfs_to_cube()`](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/#lasso.StandardTransit.shape_gtfs_to_cube), [`time_to_cube_time_period()`](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/#lasso.StandardTransit.time_to_cube_time_period), [`write_as_cube_lin()`](https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/#lasso.StandardTransit.write_as_cube_lin) -- so what is [**lasso.CubeTransit**](https://bayareametro.github.io/Lasso/_generated/lasso.CubeTransit/) for?
 
 ### Basic Network Classes
 ```mermaid
@@ -141,10 +142,38 @@ classDiagram
 ```mermaid
 classDiagram
   class StandardTransit {
+   +partridge.feed feed
+   +Parameters parameters
+   +calculate_cube_mode()
+   +cube_format()
+   +fromTransitNetwork()
+   +read_gtfs()
+   +route_properties_gtfs_to_cube()
+   +shape_gtfs_to_cube()
+   +shape_gtfs_to_dict_list()
+   +shape_gtfs_to_emme()
+   +time_to_cube_time_period()
+   +write_as_cube_lin()
   }
   link StandardTransit "https://bayareametro.github.io/Lasso/_generated/lasso.StandardTransit/#lasso.StandardTransit" "lasso.StandardTransit"
   
   class CubeTransit {
+    +list~str~ lines
+    +dict line_properties
+    +dict shapes
+    +str program_type
+    +Parameters parameters
+    +list~str~ source_list
+    +diff diff_dict
+    +add_additional_time_periods()
+    +add_cube()
+    +build_route_name()
+    +calculate_start_end_times()
+    +create_add_route_card_dict()
+    +create_delete_route_card_dict()
+    +create_from_cube()
+    +create_update_route_card_dict()
+    +cube_properties_to_standard_properties()
   }
   link CubeTransit "https://bayareametro.github.io/Lasso/_generated/lasso.CubeTransit/#lasso.CubeTransit" "lasso.CubeTransit"
 
@@ -160,4 +189,5 @@ classDiagram
 ## Other references
 * [Mermaid documentation on Class Diagrams](https://mermaid-js.github.io/mermaid/#/classDiagram)
 * [Understanding JSON Schema](https://json-schema.org/understanding-json-schema/index.html)
+* [partridge](https://github.com/remix/partridge)
 
