@@ -17,6 +17,7 @@ I think these libraries are a great start but there are some issues that I see a
   * Not to mention forks which add even more versions of these branches
   * The work to make a plan for this and execute it is likely related to the future Governance/Funding conversation
 * **Tests** -- I think a lot of the potential for making sure these libraries work as expected with continuous development is through testing infrastructure, but this is currently [not maintained](https://travis-ci.org/github/wsp-sag/network_wrangler/branches).  See my attempt to fix tests on [wsp-sag/network_wrangler, develop branch](https://github.com/wsp-sag/network_wrangler/pull/281)
+* **Refactoring** -- I think the code organization in the classes below need clarification at minimum, but likely some refactoring.
 
 ## Existing Classes
 
@@ -29,6 +30,8 @@ I think these libraries are a great start but there are some issues that I see a
 classDiagram 
 RoadwayNetwork <-- TransitNetwork
 RoadwayNetwork <|-- ModelRoadwayNetwork
+Scenario <-- RoadwayNetwork
+Scenario <-- TransitNetwork
 
 %% network_wrangler classes
 
@@ -59,6 +62,20 @@ RoadwayNetwork <|-- ModelRoadwayNetwork
     +graph nx.MultiDiGrapp
   }
   link TransitNetwork "https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.TransitNetwork/" "network_wrangler.TransitNetwork"
+
+  class Scenario {
+    +dict base_scenario
+    +RoadwayNetwork road_net
+    +TransitNetwork transit_net
+    +list~ProjectCard~ project_cards
+    +list~str~ applied_projects
+    +add_project_card_from_file()
+    +add_project_cards_from_directory()
+    +add_project_cards_from_tags()
+    +check_scenario_requisites()
+    +apply_all_projects()
+  }
+  link Scenario "https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.Scenario/" "network_wrangler.Scenario"
   
 %% lasso classes
 
@@ -71,13 +88,16 @@ RoadwayNetwork <|-- ModelRoadwayNetwork
 ```mermaid
 classDiagram 
   class ProjectCard {
+    +dict __dict__
+    +bool valid
+    +read_yml()
+    +read_wrangler_card()
+    +validate_project_card_schema()
+    +wrrite()
   }
   link ProjectCard "https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.ProjectCard/" "network_wrangler.ProjectCard"
   
-  class Scenario {
-  }
-  link Scenario "https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.Scenario/" "network_wrangler.Scenario"
-  
+
   class Project {
     +str project_name
     +dict card_data
