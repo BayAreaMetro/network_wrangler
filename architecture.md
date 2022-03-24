@@ -1,7 +1,15 @@
-[Merrmaid documentation on Class Diagrams](https://mermaid-js.github.io/mermaid/#/classDiagram)
+[Mermaid documentation on Class Diagrams](https://mermaid-js.github.io/mermaid/#/classDiagram)
+
+<style 
+  type="text/css">
+h1 {color:red;}
+
+p {color:blue;}
+</style>
+okay
 
 ```mermaid
-classDiagram
+classDiagram 
 RoadwayNetwork <-- TransitNetwork
 RoadwayNetwork <|-- ModelRoadwayNetwork
 
