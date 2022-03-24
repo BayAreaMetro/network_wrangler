@@ -60,7 +60,18 @@ Scenario --o ProjectCard
     +feed DotDict
     +config nx.DiGraph
     +road_net RoadwayNetwork
-    +graph nx.MultiDiGrapp
+    +graph nx.MultiDiGraph
+    +apply(project_card_dictionary)
+    +apply_python_calculation()
+    +apply_transit_feature_change()
+    +check_network_connectivity()
+    +route_between_nodes()
+    +route_ids_in_routestxt()
+    +validate_frequencies()
+    +validate_road_network_consistencies()
+    +validate_transit_shapes()
+    +validate_transit_stops()
+    +write()
   }
   link TransitNetwork "https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.TransitNetwork/" "network_wrangler.TransitNetwork"
 
