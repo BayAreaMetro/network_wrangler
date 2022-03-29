@@ -19,6 +19,12 @@ I think these libraries are a great start but there are some issues that I see a
 * **Tests** -- I think a lot of the potential for making sure these libraries work as expected with continuous development is through testing infrastructure, but this is currently [not maintained](https://travis-ci.org/github/wsp-sag/network_wrangler/branches).  See my attempt to fix tests on [wsp-sag/network_wrangler, develop branch](https://github.com/wsp-sag/network_wrangler/pull/281)
 * **Refactoring** -- I think the code organization in the classes below need clarification at minimum, but likely some refactoring.
 
+## MTC Needs
+MTC needs to be able to:
+* Fully **understand** the pipeline process in order to answer questions from partners
+* **Easily rerun** the pipepline process in order to include new sources (e.g. networks from other county partners), to make adjustments of variable definitions, etc
+* **Revise** the definition of the MTC Standard Network in order to repsond to feedback from partners
+
 ## Existing Classes
 
 * [**network_wrangler.RoadwayNetwork**](https://bayareametro.github.io/network_wrangler/_generated/network_wrangler.RoadwayNetwork/) is described simply as a "Representation of a Roadway Network".  What does this mean?  What are the required fields?  
