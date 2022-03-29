@@ -25,6 +25,7 @@ MTC needs to be able to:
   * what files/inputs were used, including vintage/version of data downloaded/extracted during the process
   * what are the sources of the attributes in the resulting network
   * transit fare structure/files; this process is particularly inscrutable
+  * a detailed log with relevant set of information for reference accompanying each network build
 * **Validate** that the resulting Standard Network satisfy *evolving* requirements (e.g. attributes be required, specific values, relate to other values in a specific way, etc.)  It seems like the schema should be used for this.
 * **Revise** the definition of the MTC Standard Network in order to respond to feedback from partners
 * **Easily rerun** the pipeline process and subsequent steps in order to include new sources (e.g. networks from other county partners), to make adjustments of variable definitions, etc
