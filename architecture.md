@@ -10,7 +10,7 @@ Note that the below diagrams and text link to MTC's working versions of these mo
 
 ## Overall Comments
 I think these libraries are a great start but there are some issues that I see as being critical to fix:
-* **Documentation** -- Whenever our staff looks at the code, we end up with *so many* questions.  We'd be happy to add answers to the documentation as we figure it out BUT they won't be useful to the greater project without
+* **Documentation** -- Whenever our staff looks at the code, we end up with *so many* questions. This has been having a large impact on our ability to use the code base. We'd be happy to add answers to the documentation as we figure it out BUT they won't be useful to the greater project without
 * **Branch housekeeping** -- There are many active branches: 
   * [wsp-sag/network_wranger](https://github.com/wsp-sag/network_wrangler/branches): master, develop, develop_with_ranch, generric_agency
   * [wsp-sag/Lasso](https://github.com/wsp-sag/Lasso/branches): master, develop, develop_with_ranch, generic_agency
