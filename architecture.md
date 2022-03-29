@@ -22,8 +22,8 @@ I think these libraries are a great start but there are some issues that I see a
 ## MTC Needs
 MTC needs to be able to:
 * Fully **understand** the pipeline process in order to answer questions from partners
+* **Revise** the definition of the MTC Standard Network in order to respond to feedback from partners
 * **Easily rerun** the pipepline process in order to include new sources (e.g. networks from other county partners), to make adjustments of variable definitions, etc
-* **Revise** the definition of the MTC Standard Network in order to repsond to feedback from partners
 
 ## Existing Classes
 
