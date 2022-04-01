@@ -300,6 +300,21 @@ classDiagram
   link SetupEmme "https://bayareametro.github.io/Lasso/_generated/lasso.SetupEmme/#lasso.SetupEmme" "lasso.SetupEmme"
 ```
 
+### Proposed Network Classes
+```mermaid
+classDiagram
+direction BT
+%% RoadwayNetwork <-- TransitNetwork
+MtcRoadwayNetwork --|> RoadwayNetwork
+MtcTransitNetwork --|> TransitNetwork
+ModelRoadwayNetwork --> MtcRoadwayNetwork
+ModelTransitNetwork --> MtcTransitNetwork
+CubeTransitNetwork --|> ModelTransitNetwork
+EmmeTransitNetwork --|> ModelTransitNetwork
+CubeRoadwayNetwork --|> ModelRoadwayNetwork
+EmmeRoadwayNetwork --|> ModelRoadwayNetwork
+```
+
 ## Other references
 * [Mermaid documentation on Class Diagrams](https://mermaid-js.github.io/mermaid/#/classDiagram)
 * [Understanding JSON Schema](https://json-schema.org/understanding-json-schema/index.html)
