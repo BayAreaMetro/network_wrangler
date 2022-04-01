@@ -1,12 +1,24 @@
 # Architecture Thoughts
 Initial thoughts on architecture of network_wrangler, lasso, ranch (and travel-model-two-networks)
 
-## Code References
-Note that the below diagrams and text link to MTC's working versions of these modules, which are:
-* [BayAreaMetro/network_wrangler, generic_agency branch](https://github.com/BayAreaMetro/network_wrangler/tree/generic_agency)
-* [BayAreaMetro/Lasso, mtc_parameters branch](https://github.com/BayAreaMetro/Lasso/tree/mtc_parameters)
-* [wsp-sag/Ranch](https://github.com/wsp-sag/Ranch) is not being used by our codebase at this time; instead we have pipeline scripts in
-* [BayAreaMetro/travel-model-two-networks, develop branch](https://github.com/BayAreaMetro/travel-model-two-networks/tree/develop)
+## Users
+* **[Metropolitan Cuncil (MetCouncil)](https://metrocouncil.org)**
+  * [wsp-sag/network_wrangler, develop_with_ranch branch](https://github.com/wsp-sag/network_wrangler/tree/develop_with_ranch)
+  * [wsp-sag/Lasso, develop_with_ranch branch](https://github.com/wsp-sag/Lasso/tree/develop_with_ranch)
+  * [wsp-sag/ranch, ?? branch](https://github.com/wsp-sag/Ranch)
+  * [Metropolitan-Council/project_card_registry, Test1 branch](https://github.com/Metropolitan-Council/project_card_registry/tree/Test1)
+* **[Metropolitan Transportation Commission (MTC)](https://mtc.ca.gov)** - Note that the below diagrams and text link to MTC's working versions of these modules, which are:
+  * [BayAreaMetro/network_wrangler, generic_agency branch](https://github.com/BayAreaMetro/network_wrangler/tree/generic_agency)
+  * [BayAreaMetro/Lasso, mtc_parameters branch](https://github.com/BayAreaMetro/Lasso/tree/mtc_parameters)
+  * [wsp-sag/Ranch](https://github.com/wsp-sag/Ranch) is not being used by our codebase at this time; instead we have pipeline scripts in
+  * [BayAreaMetro/travel-model-two-networks, develop branch](https://github.com/BayAreaMetro/travel-model-two-networks/tree/develop)
+  * [BayAreaMetro/project_card_registry, main branch](https://github.com/BayAreaMetro/project_card_registry) not in use yet
+* **Alameda/Contra Costa (BiCounty)**
+  * What code was used for this?  George Naylor sent us a snapshot of the code base
+* **[Link21 Rail Study](https://link21program.org/en)**
+  * What code was used for this?
+* **Southeast Florida??**
+  * [wsp-sag/Lasso, seflorida branch](https://github.com/wsp-sag/Lasso/tree/seflorida) - Is this being used?
 
 ## Overall Comments
 I think these libraries are a great start but there are some issues that I see as being critical to fix:
@@ -22,14 +34,22 @@ I think these libraries are a great start but there are some issues that I see a
 
 ## MTC Requirements
 MTC needs to be able to:
-* Fully **understand** (and help our partners understand) the pipeline *and* post-pipeline process in order to answer questions from partners, including:
+* Fully **understand (and help our partners understand) the pipeline *and* post-pipeline process** in order to answer questions from partners, including:
   * what files/inputs were used, including vintage/version of data downloaded/extracted during the process
   * what are the sources of the attributes in the resulting network
   * transit fare structure/files; this process is particularly inscrutable
-  * a detailed log with relevant set of information for reference accompanying each network build
-* **Validate** that the resulting Standard Network satisfy *evolving* requirements (e.g. attributes be required, specific values, relate to other values in a specific way, etc.)  It seems like the schema should be used for this.
-* **Revise** the definition of the MTC Standard Network in order to respond to feedback from partners
-* **Easily rerun** the pipeline process and subsequent steps in order to include new sources (e.g. networks from other county partners), to make adjustments of variable definitions, etc
+  * a detailed log with information for the network build, including what inputs were used (e.g. what SHST version was used, what OSM vintage was included, what other networks were conflated, what vintage of GTFS files were included)  
+* **Easily run the pipeline process** and subsequent steps in order to include new sources (e.g. networks from other county partners), to make adjustments of variable definitions
+* **Validate that the resulting Standard Network(s) satisfy *evolving* requirements** (e.g. attributes be required, specific values, relate to other values in a specific way, etc.)  It seems like the schema should be used for this.
+* **Revise the definition of the MTC Standard Network** in order to respond to feedback from partners, usability isssues, etc.  For example:
+  * [num_lanes comprises of GP,HOV,ML,etc](https://github.com/BayAreaMetro/travel-model-two-networks/issues/62)
+  * [Roadway links missing names (and freeway links missing route direction](https://github.com/BayAreaMetro/travel-model-two-networks/issues/58)
+  * [Freeway names are not useful, missing route num](https://github.com/BayAreaMetro/travel-model-two-networks/issues/55)
+  * [Link shapes do not represent direction in point order of polyline](https://github.com/BayAreaMetro/travel-model-two-networks/issues/56) 
+* **Build a series of networks from a base network and the application of sets of project cards** in a way that is
+  * transparent to planners (e.g. they can see the list of projects applied to each network)
+  * easy to debug (e.g. [roadway links and transit lines are tagged with the project cards that modified them](https://github.com/wsp-sag/network_wrangler/issues/282)
+  * validated (e.g. modelers can be sure that every network satisfies the defined requirements)
 
 ## Existing Classes
 
