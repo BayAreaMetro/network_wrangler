@@ -313,6 +313,7 @@ CubeTransitNetwork --|> ModelTransitNetwork
 EmmeTransitNetwork --|> ModelTransitNetwork
 CubeRoadwayNetwork --|> ModelRoadwayNetwork
 EmmeRoadwayNetwork --|> ModelRoadwayNetwork
+MtcParameters --|> Parameters
 ```
 
 ## Other references
