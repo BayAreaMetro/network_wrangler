@@ -2,7 +2,7 @@
 Initial thoughts on architecture of network_wrangler, lasso, ranch (and travel-model-two-networks)
 
 ## Users
-* **[Metropolitan Cuncil (MetCouncil)](https://metrocouncil.org)**
+* **[Metropolitan Council (MetCouncil)](https://metrocouncil.org)**
   * [wsp-sag/network_wrangler, develop_with_ranch branch](https://github.com/wsp-sag/network_wrangler/tree/develop_with_ranch)
   * [wsp-sag/Lasso, develop_with_ranch branch](https://github.com/wsp-sag/Lasso/tree/develop_with_ranch)
   * [wsp-sag/ranch, ?? branch](https://github.com/wsp-sag/Ranch)
