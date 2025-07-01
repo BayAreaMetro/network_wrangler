@@ -8,7 +8,8 @@ import copy
 from typing import Optional, Union
 
 import geopandas as gpd
-from pandera import DataFrameModel, Field
+from pandera import Field
+from pandera.api.pandas.model import DataFrameModel
 from pandera.typing import DataFrame, Series
 from pydantic import ConfigDict
 

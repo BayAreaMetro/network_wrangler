@@ -20,7 +20,8 @@ import numpy as np
 import pandas as pd
 import pandera as pa
 from pandas import Int64Dtype as Int64
-from pandera import DataFrameModel, Field
+from pandera import Field
+from pandera.api.pandas.model import DataFrameModel
 from pandera.typing import Series
 from pandera.typing.geopandas import GeoSeries
 

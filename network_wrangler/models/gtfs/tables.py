@@ -28,7 +28,8 @@ from typing import ClassVar, Optional
 import pandas as pd
 import pandera as pa
 from pandas import Timestamp
-from pandera import DataFrameModel, Field
+from pandera import Field
+from pandera.api.pandas.model import DataFrameModel
 from pandera.typing import Category, Series
 
 from ...logger import WranglerLogger

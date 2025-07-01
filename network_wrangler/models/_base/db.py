@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import Callable, ClassVar, Optional
 
 import pandas as pd
-from pandera import DataFrameModel
+from pandera.api.pandas.model import DataFrameModel
 from pandera.errors import SchemaErrors
 
 from ...logger import WranglerLogger
