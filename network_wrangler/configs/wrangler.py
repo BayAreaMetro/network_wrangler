@@ -29,7 +29,7 @@ Usage:
 
 If not provided, Wrangler will use reasonable defaults.
 
-??? Example "Default Wrangler Configuration Values"
+!!! Example "Default Wrangler Configuration Values"
 
     If not explicitly provided, the following default values are used:
 
