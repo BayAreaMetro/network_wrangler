@@ -190,16 +190,16 @@ For an interactive demonstration of what this means: `notebooks.Roadway Network 
 | `__init__.py` | Things that **must** get done every time `network_wrangler` is used.|
 | `bin`| Executable scripts. |
 | [`configs`](api.md#network_wrangler.configs) | Structure and default values for user-settable configuration. |
-| [`errors.py`](api.md#network_wrangler.errors) | User-facing errors. |
-| [`logger.py`](api.md#network_wrangler.logger) | Logging utilities and the WranglerLogger class. |
+| [`errors.py`](api_utils.md#network_wrangler.errors) | User-facing errors. |
+| [`logger.py`](api_utils.md#network_wrangler.logger) | Logging utilities and the WranglerLogger class. |
 | [`models`](data_models.md)| Pydantic and pandera data models and helper functions for them. |
-| [`params.py`](api.md#network_wrangler.params) | Package-wide constants. |
+| [`params.py`](api_utils.md#network_wrangler.params) | Package-wide constants. |
 | [`roadway`](api_roadway.md) | Classes and functions pertaining to read, write, analyzing and editing roadway networks. |
 | [`scenario.py`](api.md#network_wrangler.scenario)| Scenario object class and helper functions. |
-| [`time.py`](api.md#network_wrangler.time) | Time helper functions. |
+| [`time.py`](api_utils.md#network_wrangler.time) | Time helper functions. |
 | [`transit`](api_transit.md) | Classes and functions pertaining to read, write, analyzing and editing transit networks. |
-| [`utils`](api.md#network_wrangler.utils)| Utility functions. |
-| [`viz.py`](api.md#network_wrangler.viz) | Visualization helper functions. |
+| [`utils`](api_utils.md#network_wrangler.utils.utils)| Utility functions. |
+| [`viz.py`](api_utils.md#network_wrangler.viz) | Visualization helper functions. |
 
 | **`network_wrangler/roadway`** |  |
 | ------ | ----- |

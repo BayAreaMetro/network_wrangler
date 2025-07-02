@@ -33,9 +33,11 @@ nav:
   - Data Models: data_models.md
   - Development: development.md
   - API:
-    - Fundamentals: api.md
+    - Core: api.md
+    - Projects: api_projects.md
     - Roadway: api_roadway.md
     - Transit: api_transit.md
+    - Utilities: api_utils.md
   - Networks: networks.md
 
 plugins:
