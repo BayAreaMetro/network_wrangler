@@ -11,6 +11,10 @@
         <link rel="canonical" href="https://network-wrangler.github.io/network_wrangler/main/development/">
       
       
+        <link rel="prev" href="../data_models/">
+      
+      
+        <link rel="next" href="../api/">
       
       
       <link rel="icon" href="../assets/images/favicon.png">
@@ -92,7 +96,9 @@
     
       
 
-<header class="md-header" data-md-component="header">
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
     <a href=".." title="Network Wrangler" class="md-header__button md-logo" aria-label="Network Wrangler" data-md-component="logo">
       
@@ -204,14 +210,8 @@
     
   </nav>
   
-</header>
     
-    <div class="md-container" data-md-component="container">
       
-      
-        
-          
-            
 <nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
   <div class="md-grid">
     <ul class="md-tabs__list">
@@ -287,6 +287,25 @@
         
   
   
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+    
+  
+  Development
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
   
     
     
@@ -324,7 +343,13 @@
     </ul>
   </div>
 </nav>
-          
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
         
       
       <main class="md-main" data-md-component="main">
@@ -332,9 +357,7 @@
           
             
               
-                
-              
-              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" hidden>
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
                 <div class="md-sidebar__scrollwrap">
                   <div class="md-sidebar__inner">
                     
@@ -454,6 +477,297 @@
       
   
   
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    Development
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    Development
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#contributing-to-network-wrangler" class="md-nav__link">
+    <span class="md-ellipsis">
+      Contributing to Network Wrangler
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Contributing to Network Wrangler">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Setup
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-tools" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommended Tools
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setup-virtual-environment" class="md-nav__link">
+    <span class="md-ellipsis">
+      Setup Virtual Environment
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#clone" class="md-nav__link">
+    <span class="md-ellipsis">
+      Clone
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#install-in-develop-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Install in Develop Mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ide-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      IDE Settings
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vscode" class="md-nav__link">
+    <span class="md-ellipsis">
+      VSCode
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#development-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Development Workflow
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Documentation
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Documentation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      References
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#making-sure-your-code-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      Making sure your code works
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Making sure your code works">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#linting-and-type-checking" class="md-nav__link">
+    <span class="md-ellipsis">
+      Linting and Type Checking
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#adding-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Adding Tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Running Tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#profiling-performance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Profiling Performance
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#evaluate-code-maintainability" class="md-nav__link">
+    <span class="md-ellipsis">
+      Evaluate Code Maintainability
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#continuous-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Continuous Integration
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#project-governance" class="md-nav__link">
+    <span class="md-ellipsis">
+      Project Governance
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#code-of-conduct" class="md-nav__link">
+    <span class="md-ellipsis">
+      Code of Conduct
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#contributors" class="md-nav__link">
+    <span class="md-ellipsis">
+      Contributors
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#release-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      Release History
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#changelog" class="md-nav__link">
+    <span class="md-ellipsis">
+      Changelog
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
   
   
     
@@ -477,10 +791,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -491,8 +805,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             API
           </label>
@@ -758,6 +1072,13 @@
 </span></code></pre></div>
 </div>
 <p>Documentation is deployed using the <a href="https://github.com/jimporter/mike"><code>mike</code></a> package and Github Actions configured in <code>.github/workflows/</code> for each &ldquo;ref&rdquo; (i.e. branch) in the network_wrangler repository.</p>
+<h4 id="references">References<a class="headerlink" href="#references" title="Permanent link"> ¶</a></h4>
+<ul>
+<li><a href="https://www.mkdocs.org/user-guide/configuration/">MkDocs User Guide: Configuration</a></li>
+<li><a href="https://mkdocstrings.github.io/python/usage/">mkdocstrings-python</a></li>
+<li><a href="https://squidfunk.github.io/mkdocs-material/setup/">Material for MkDocs Setup</a></li>
+<li><a href="https://squidfunk.github.io/mkdocs-material/reference/admonitions/#supported-types">Admonitions</a></li>
+</ul>
 <h3 id="making-sure-your-code-works">Making sure your code works<a class="headerlink" href="#making-sure-your-code-works" title="Permanent link"> ¶</a></h3>
 <h4 id="linting-and-type-checking">Linting and Type Checking<a class="headerlink" href="#linting-and-type-checking" title="Permanent link"> ¶</a></h4>
 <p>Before even running the tests, its a good idea to lint and check the types of the code using pre-commit:</p>
@@ -818,13 +1139,13 @@ All tests other than those with the decorator <code>@pytest.mark.skipci</code> w
 <p>Contributors to the Network Wrangler Project are expected to read and follow the <a href="../CODE_OF_CONDUCT.md">CODE_OF_CONDUCT</a> for the project.</p>
 <h2 id="contributors">Contributors<a class="headerlink" href="#contributors" title="Permanent link"> ¶</a></h2>
 <ol>
-<li><a href="../@lmz">Lisa Z.</a> - initial Network Wrangler implementation at <a href="../www.sfcta.org">SFCTA</a></li>
-<li><a href="../@billyc">Billy C.</a> - initial Network Wrangler implementation at <a href="../www.sfcta.org">SFCTA</a></li>
-<li><a href="../@e-lo">Elizabeh S.</a></li>
-<li><a href="../@i-am-sijia">Sijia W.</a></li>
-<li><a href="../@DavidOry">David O.</a></li>
-<li><a href="../@AshishKuls">Ashish K.</a></li>
-<li><a href="../@yueshuaing">Yue S.</a></li>
+<li><a href="https://github.com/lmz">Lisa Z.</a> - initial Network Wrangler implementation at <a href="http://www.sfcta.org">SFCTA</a></li>
+<li><a href="https://github.com/billyc">Billy C.</a> - initial Network Wrangler implementation at <a href="http://www.sfcta.org">SFCTA</a></li>
+<li><a href="https://github.com/e-lo">Elizabeth S.</a></li>
+<li><a href="https://github.com/i-am-sijia">Sijia W.</a></li>
+<li><a href="https://github.com/DavidOry">David O.</a></li>
+<li><a href="https://github.com/AshishKuls">Ashish K.</a></li>
+<li><a href="https://github.com/yueshuaing">Yue S.</a></li>
 </ol>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
@@ -886,13 +1207,8 @@ All tests other than those with the decorator <code>@pytest.mark.skipci</code> w
 
 
 
-  
-  
 
 
-
-
-  
 
 
 
@@ -932,7 +1248,7 @@ All tests other than those with the decorator <code>@pytest.mark.skipci</code> w
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.indexes", "navigation.tabs", "navigation.sections", "toc.integrate", "toc.follow"], "search": "../assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    <script id="__config" type="application/json">{"base": "..", "features": ["content.code.annotate", "content.code.copy", "content.tabs.link", "navigation.indexes", "navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "toc.integrate", "toc.follow"], "search": "../assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
       <script src="../assets/javascripts/bundle.3220b9d7.min.js"></script>
