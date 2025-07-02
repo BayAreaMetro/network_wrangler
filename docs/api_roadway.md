@@ -9,6 +9,16 @@ Submodules which define and extend the links, nodes, and shapes dataframe object
 - dataframe schemas to be used for dataframe validation using `pandera`
 - methods which extend the dataframes
 
+## Tables
+
+::: network_wrangler.models.roadway.tables
+    options:
+        heading_level: 3
+
+::: network_wrangler.models.roadway.types
+    options:
+        heading_level: 3
+
 ## Roadway Links
 
 ::: network_wrangler.roadway.links.io

@@ -1,5 +1,11 @@
 # Transit
 
+## Tables
+
+::: network_wrangler.models.gtfs.tables
+    options:
+        heading_level: 3
+
 ## Feed
 
 ::: network_wrangler.transit.feed.feed

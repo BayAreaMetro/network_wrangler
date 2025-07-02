@@ -133,6 +133,12 @@ Documentation is stored in the `/docs` folder and created by [`mkdocs`](https://
 
 Documentation is deployed using the [`mike`](https://github.com/jimporter/mike) package and Github Actions configured in `.github/workflows/` for each "ref" (i.e. branch) in the network_wrangler repository.
 
+### References
+* [MkDocs User Guide: Configuration](https://www.mkdocs.org/user-guide/configuration/)
+* [mkdocstrings-python](https://mkdocstrings.github.io/python/usage/)
+* [Material for MkDocs Setup](https://squidfunk.github.io/mkdocs-material/setup/)
+* [Admonitions](https://squidfunk.github.io/mkdocs-material/reference/admonitions/#supported-types)
+
 ## Making sure your code works
 
 ### Linting and Type Checking

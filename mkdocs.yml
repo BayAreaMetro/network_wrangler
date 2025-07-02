@@ -10,6 +10,7 @@ theme:
     - content.tabs.link
     - navigation.indexes
     - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
 # API contents are so long, disabling these
 #   - navigation.expand
@@ -30,6 +31,7 @@ nav:
   - How To: how_to.md
   - Design: design.md
   - Data Models: data_models.md
+  - Development: development.md
   - API:
     - Fundamentals: api.md
     - Roadway: api_roadway.md
@@ -58,7 +60,7 @@ plugins:
           options:
             docstring_section_style: list
             show_source: true
-            show_if_no_docstring: true
+            show_if_no_docstring: false
             show_object_full_path: true
             show_root_full_path: true
             show_root_members_full_path: true

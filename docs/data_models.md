@@ -14,11 +14,11 @@ graph TD
     A --> F["NodeGeometryChangeTable"]
     
     click A "https://pandera.readthedocs.io/en/stable/reference/generated/pandera.api.pandas.model.DataFrameModel.html"
-    click B "#network_wrangler.models.roadway.tables.RoadLinksTable"
-    click C "#network_wrangler.models.roadway.tables.RoadNodesTable"
-    click D "#network_wrangler.models.roadway.tables.RoadShapesTable"
-    click E "#network_wrangler.models.roadway.tables.ExplodedScopedLinkPropertyTable"
-    click F "#network_wrangler.roadway.nodes.edit.NodeGeometryChangeTable"
+    click B "../api_roadway/#network_wrangler.models.roadway.tables.RoadLinksTable"
+    click C "../api_roadway/#network_wrangler.models.roadway.tables.RoadNodesTable"
+    click D "../api_roadway/#network_wrangler.models.roadway.tables.RoadShapesTable"
+    click E "../api_roadway/#network_wrangler.models.roadway.tables.ExplodedScopedLinkPropertyTable"
+    click F "../api_roadway/#network_wrangler.roadway.nodes.edit.NodeGeometryChangeTable"
     
     classDef pandera fill:#e1f5fe,stroke:#01579b,stroke-width:3px
     classDef roadway fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
@@ -47,18 +47,18 @@ graph TD
     H --> M["WranglerStopTimesTable"]
     
     click A "https://pandera.readthedocs.io/en/stable/reference/generated/pandera.api.pandas.model.DataFrameModel.html"
-    click B "../networks/#network_wrangler.models.gtfs.tables.AgenciesTable"
-    click C "../networks/#network_wrangler.models.gtfs.tables.StopsTable"
-    click D "../networks/#network_wrangler.models.gtfs.tables.RoutesTable"
-    click E "../networks/#network_wrangler.models.gtfs.tables.ShapesTable"
-    click F "../networks/#network_wrangler.models.gtfs.tables.TripsTable"
-    click G "../networks/#network_wrangler.models.gtfs.tables.FrequenciesTable"
-    click H "../networks/#network_wrangler.models.gtfs.tables.StopTimesTable"
-    click I "../networks/#network_wrangler.models.gtfs.tables.WranglerStopsTable"
-    click J "../networks/#network_wrangler.models.gtfs.tables.WranglerShapesTable"
-    click K "../networks/#network_wrangler.models.gtfs.tables.WranglerTripsTable"
-    click L "../networks/#network_wrangler.models.gtfs.tables.WranglerFrequenciesTable"
-    click M "../networks/#network_wrangler.models.gtfs.tables.WranglerStopTimesTable"
+    click B "../api_transit/#network_wrangler.models.gtfs.tables.AgenciesTable"
+    click C "../api_transit/#network_wrangler.models.gtfs.tables.StopsTable"
+    click D "../api_transit/#network_wrangler.models.gtfs.tables.RoutesTable"
+    click E "../api_transit/#network_wrangler.models.gtfs.tables.ShapesTable"
+    click F "../api_transit/#network_wrangler.models.gtfs.tables.TripsTable"
+    click G "../api_transit/#network_wrangler.models.gtfs.tables.FrequenciesTable"
+    click H "../api_transit/#network_wrangler.models.gtfs.tables.StopTimesTable"
+    click I "../api_transit/#network_wrangler.models.gtfs.tables.WranglerStopsTable"
+    click J "../api_transit/#network_wrangler.models.gtfs.tables.WranglerShapesTable"
+    click K "../api_transit/#network_wrangler.models.gtfs.tables.WranglerTripsTable"
+    click L "../api_transit/#network_wrangler.models.gtfs.tables.WranglerFrequenciesTable"
+    click M "../api_transit/#network_wrangler.models.gtfs.tables.WranglerStopTimesTable"
     
     classDef pandera fill:#e1f5fe,stroke:#01579b,stroke-width:3px
     classDef gtfs fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
@@ -70,42 +70,10 @@ graph TD
 ```
 
 **Legend:**
+
 - 🔗 **DataFrameModel** - External pandera base class (links to pandera docs)
 - **Purple** - Roadway network data models  
 - **Green** - Standard GTFS transit data models
 - **Orange** - Wrangler-enhanced GTFS models with additional fields
 
 💡 **Tip:** Click on any box in the diagrams to jump directly to that class's documentation!
-
-## Roadway
-
-### Tables
-
-::: network_wrangler.models.roadway.tables
-
-### Types
-
-::: network_wrangler.models.roadway.types
-
-## Transit
-
-::: network_wrangler.transit.feed.feed
-
-### Pure GTFS Tables
-
-::: network_wrangler.models.gtfs
-
-## Project Cards
-
-### Projects
-
-::: network_wrangler.models.projects.roadway_changes.RoadwayDeletion
-::: network_wrangler.models.projects.roadway_changes.RoadPropertyChange
-
-### Roadway Selections
-
-::: network_wrangler.models.projects.roadway_selection
-
-### Transit Selections
-
-::: network_wrangler.models.projects.transit_selection
