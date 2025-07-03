@@ -5,6 +5,9 @@
 ::: network_wrangler.models.gtfs.tables
     options:
         heading_level: 3
+::: network_wrangler.models.gtfs.gtfs
+    options:
+        heading_level: 3
 
 ## Feed
 

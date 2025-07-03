@@ -44,9 +44,9 @@ class Feed(DBModelMixin):
 
     Attributes:
         table_names (list[str]): list of table names in GTFS feed.
-        tables (list[DataFrame]):: list tables as dataframes.
-        stop_times (DataFrame[WranglerStopTimesTable]):: stop_times dataframe with roadway node_ids
-        stops (DataFrame[WranglerStopsTable]):stops dataframe
+        tables (list[DataFrame]): list tables as dataframes.
+        stop_times (DataFrame[WranglerStopTimesTable]): stop_times dataframe with roadway node_ids
+        stops (DataFrame[WranglerStopsTable]): stops dataframe
         shapes (DataFrame[WranglerShapesTable]): shapes dataframe
         trips (DataFrame[WranglerTripsTable]): trips dataframe
         frequencies (DataFrame[WranglerFrequenciesTable]): frequencies dataframe
