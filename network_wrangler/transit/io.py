@@ -30,16 +30,22 @@ def _feed_path_ref(path: Path) -> Path:
 
 
 def load_feed_from_path(
-    feed_path: Union[Path, str], file_format: TransitFileTypes = "txt"
-) -> Feed:
-    """Create a Feed object from the path to a GTFS transit feed.
+    feed_path: Union[Path, str], 
+    file_format: TransitFileTypes = "txt",
+    wrangler_flavored: bool = True
+) -> Union[Feed, GtfsModel]:
+    """Create a [Feed][network_wrangler.transit.feed.feed.Feed] or 
+    [GtfsModel][network_wrangler.models.gtfs.gtfs.GtfsModel] object
+    from the path to a GTFS transit feed.
 
     Args:
         feed_path (Union[Path, str]): The path to the GTFS transit feed.
         file_format: the format of the files to read. Defaults to "txt"
+        wrangler_flavored: If True, creates a Wrangler-enhanced Feed object.
+                          If False, creates a pure GtfsModel object. Defaults to True.
 
     Returns:
-        Feed: The TransitNetwork object created from the GTFS transit feed.
+        Union[Feed, GtfsModel]: The Feed or GtfsModel object created from the GTFS transit feed.
     """
     feed_path = _feed_path_ref(Path(feed_path))  # unzips if needs to be unzipped
 
@@ -49,16 +55,21 @@ def load_feed_from_path(
 
     WranglerLogger.info(f"Reading GTFS feed tables from {feed_path}")
 
+    # Use the appropriate table names based on the model type
+    model_class = Feed if wrangler_flavored else GtfsModel
     feed_possible_files = {
-        table: list(feed_path.glob(f"*{table}.{file_format}")) for table in Feed.table_names
+        table: list(feed_path.glob(f"*{table}.{file_format}")) for table in model_class.table_names
     }
+    WranglerLogger.debug(f"model_class={model_class}  feed_possible_files={feed_possible_files}")
+
 
     # make sure we have all the tables we need
     _missing_files = [t for t, v in feed_possible_files.items() if not v]
 
     if _missing_files:
         WranglerLogger.debug(f"!!! Missing transit files: {_missing_files}")
-        msg = f"Required GTFS Feed table(s) not in {feed_path}: \n  {_missing_files}"
+        model_name = "Feed" if wrangler_flavored else "GtfsModel"
+        msg = f"Required GTFS {model_name} table(s) not in {feed_path}: \n  {_missing_files}"
         raise RequiredTableError(msg)
 
     # but don't want to have more than one file per search
@@ -72,7 +83,7 @@ def load_feed_from_path(
     feed_files = {t: f[0] for t, f in feed_possible_files.items()}
     feed_dfs = {table: _read_table_from_file(table, file) for table, file in feed_files.items()}
 
-    return load_feed_from_dfs(feed_dfs)
+    return load_feed_from_dfs(feed_dfs, wrangler_flavored=wrangler_flavored)
 
 
 def _read_table_from_file(table: str, file: Path) -> pd.DataFrame:
@@ -88,33 +99,45 @@ def _read_table_from_file(table: str, file: Path) -> pd.DataFrame:
         raise FeedReadError(msg) from e
 
 
-def load_feed_from_dfs(feed_dfs: dict) -> Feed:
-    """Create a TransitNetwork object from a dictionary of DataFrames representing a GTFS feed.
+def load_feed_from_dfs(feed_dfs: dict, wrangler_flavored: bool = True) -> Union[Feed, GtfsModel]:
+    """Create a [Feed][network_wrangler.transit.feed.feed.Feed] or 
+    [GtfsModel][network_wrangler.models.gtfs.gtfs.GtfsModel] object 
+    from a dictionary of DataFrames representing a GTFS feed.
 
     Args:
         feed_dfs (dict): A dictionary containing DataFrames representing the tables of a GTFS feed.
+        wrangler_flavored: If True, creates a Wrangler-enhanced [Feed][] object.
+                          If False, creates a pure [GtfsModel] object. Defaults to True.
 
     Returns:
-        Feed: A Feed object representing the transit network.
+        Union[Feed, GtfsModel]: A Feed or GtfsModel object representing the transit network.
 
     Raises:
         ValueError: If the feed_dfs dictionary does not contain all the required tables.
 
-    Example:
-        >>> feed_dfs = {
-        ...     "agency": agency_df,
-        ...     "routes": routes_df,
-        ...     "stops": stops_df,
-        ...     "trips": trips_df,
-        ...     "stop_times": stop_times_df,
-        ... }
-        >>> feed = load_feed_from_dfs(feed_dfs)
-    """
-    if not all(table in feed_dfs for table in Feed.table_names):
-        msg = f"feed_dfs must contain the following tables: {Feed.table_names}"
+    Example usage:
+    ```python
+    feed_dfs = {
+        "agency": agency_df,
+        "routes": routes_df,
+        "stops": stops_df,
+        "trips": trips_df,
+        "stop_times": stop_times_df,
+    }
+    feed = load_feed_from_dfs(feed_dfs)  # Creates Feed by default
+    gtfs_model = load_feed_from_dfs(feed_dfs, wrangler_flavored=False)  # Creates GtfsModel
+    ```
+
+        """
+    # Use the appropriate model class based on the parameter
+    model_class = Feed if wrangler_flavored else GtfsModel
+    
+    if not all(table in feed_dfs for table in model_class.table_names):
+        model_name = "Feed" if wrangler_flavored else "GtfsModel"
+        msg = f"feed_dfs must contain the following tables for {model_name}: {model_class.table_names}"
         raise ValueError(msg)
 
-    feed = Feed(**feed_dfs)
+    feed = model_class(**feed_dfs)
 
     return feed
 
