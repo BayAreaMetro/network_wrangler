@@ -52,7 +52,6 @@ class GtfsModel(DBModelMixin):
     }
 
     table_names: ClassVar[list[str]] = [
-        "frequencies",
         "routes",
         "shapes",
         "stops",
@@ -60,7 +59,7 @@ class GtfsModel(DBModelMixin):
         "stop_times",
     ]
 
-    optional_table_names: ClassVar[list[str]] = ["agencies"]
+    optional_table_names: ClassVar[list[str]] = ["agencies", "frequencies"]
 
     def __init__(self, **kwargs):
         """Initialize GTFS model."""
