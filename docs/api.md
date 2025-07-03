@@ -13,6 +13,9 @@ The fundamental classes that form the backbone of Network Wrangler:
 ::: network_wrangler.transit.network
     options:
         heading_level: 3
+::: network_wrangler.models._base.db
+    options:
+        heading_level: 3
 
 ## Configuration
 

@@ -25,7 +25,8 @@ from ...utils.data import update_df_by_col_value
 class Feed(DBModelMixin):
     """Wrapper class around Wrangler flavored GTFS feed.
 
-    Most functionality derives from mixin class DBModelMixin which provides:
+    Most functionality derives from mixin class 
+    [`DBModelMixin`][network_wrangler.models._base.db.DBModelMixin] which provides:
 
     - validation of tables to schemas when setting a table attribute (e.g. self.trips = trips_df)
     - validation of fks when setting a table attribute (e.g. self.trips = trips_df)
@@ -33,12 +34,20 @@ class Feed(DBModelMixin):
     - overload of __eq__ to apply only to tables in table_names.
     - convenience methods for accessing tables
 
+    !!! note "What is Wrangler-flavored GTFS?"
+    
+        A Wrangler-flavored GTFS feed differs from a GTFS feed in the following ways:
+
+        * `frequencies.txt` is required
+        * `shapes.txt` requires additional field, `shape_model_node_id`, corresponding to `model_node_id` in the `RoadwayNetwork`
+        * `stops.txt` - `stop_id` is required to be an int
+
     Attributes:
         table_names (list[str]): list of table names in GTFS feed.
         tables (list[DataFrame]):: list tables as dataframes.
         stop_times (DataFrame[WranglerStopTimesTable]):: stop_times dataframe with roadway node_ids
         stops (DataFrame[WranglerStopsTable]):stops dataframe
-        shapes(DataFrame[WranglerShapesTable]): shapes dataframe
+        shapes (DataFrame[WranglerShapesTable]): shapes dataframe
         trips (DataFrame[WranglerTripsTable]): trips dataframe
         frequencies (DataFrame[WranglerFrequenciesTable]): frequencies dataframe
         routes (DataFrame[RoutesTable]): route dataframe

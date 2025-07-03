@@ -269,10 +269,9 @@ class WranglerShapesTable(ShapesTable):
         shape_pt_lon (float): The shape point longitude.
         shape_pt_sequence (int): The shape point sequence.
         shape_dist_traveled (Optional[float]): The shape distance traveled.
-        shape_model_node_id (int): The model_node_id of the shape point. Foreign key to the model_node_id in the nodes table.
+        shape_model_node_id (int): The `model_node_id` of the shape point. Foreign key to the `model_node_id` in the nodes table.
         projects (str): A comma-separated string value for projects that have been applied to this shape.
     """
-
     shape_model_node_id: Series[int] = Field(coerce=True, nullable=False)
     projects: Series[str] = Field(coerce=True, default="")
 

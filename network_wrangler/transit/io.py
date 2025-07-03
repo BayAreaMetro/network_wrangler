@@ -123,10 +123,11 @@ def load_transit(
     feed: Union[Feed, GtfsModel, dict[str, pd.DataFrame], str, Path],
     file_format: TransitFileTypes = "txt",
     config: WranglerConfig = DefaultConfig,
-) -> "TransitNetwork":
-    """Create a TransitNetwork object.
+) -> TransitNetwork:
+    """Create a [`TransitNetwork`][network_wrangler.transit.network.TransitNetwork] object.
 
     This function takes in a `feed` parameter, which can be one of the following types:
+
     - `Feed`: A Feed object representing a transit feed.
     - `dict[str, pd.DataFrame]`: A dictionary of DataFrames representing transit data.
     - `str` or `Path`: A string or a Path object representing the path to a transit feed file.
@@ -137,13 +138,13 @@ def load_transit(
         config: WranglerConfig object. Defaults to DefaultConfig.
 
     Returns:
-    A TransitNetwork object representing the loaded transit network.
+        (TransitNetwork): object representing the loaded transit network.
 
     Raises:
     ValueError: If the `feed` parameter is not one of the supported types.
 
     Example usage:
-    ```
+    ```python
     transit_network_from_zip = load_transit("path/to/gtfs.zip")
 
     transit_network_from_unzipped_dir = load_transit("path/to/files")

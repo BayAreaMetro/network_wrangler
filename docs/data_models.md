@@ -77,3 +77,28 @@ graph TD
 - **Orange** - Wrangler-enhanced GTFS models with additional fields
 
 💡 **Tip:** Click on any box in the diagrams to jump directly to that class's documentation!
+
+```mermaid
+classDiagram
+    class RoadwayNetwork
+    RoadwayNetwork : nodes_df
+    RoadwayNetwork : links_df
+    RoadwayNetwork : shapes_df
+    RoadwayNetwork : model_net()
+
+    class RoadNodesTable
+
+    class RoadLinksTable
+
+    class RoadShapesTable
+
+    RoadwayNetwork --* RoadNodesTable
+    RoadwayNetwork --* RoadLinksTable
+    RoadwayNetwork --* RoadShapesTable
+
+    link RoadwayNetwork "../api_roadway/#network_wrangler.roadway.networks.RoadwayNetwork"
+    link RoadNodesTable "../api_roadway/#network_wrangler.models.roadway.RoadNodesTable"
+    link RoadLinksTable "../api_roadway/#network_wrangler.models.roadway.RoadLinksTable"
+    link RoadShapestable "../api_roadway/#network_wrangler.models.roadway.RoadShapestable"
+
+```
