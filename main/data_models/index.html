@@ -272,6 +272,13 @@
     </span>
 </a>
 </li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#dbmodelmixin-inheritance-diagrams">
+<span class="md-ellipsis">
+      DBModelMixin Inheritance Diagrams
+    </span>
+</a>
+</li>
 </ul>
 </nav>
 </li>
@@ -486,9 +493,37 @@ graph TD
 <p><strong>Legend:</strong></p>
 <ul>
 <li>🔗 <strong>DataFrameModel</strong> - External pandera base class (links to pandera docs)</li>
-<li><strong>Purple</strong> - Roadway network data models  </li>
-<li><strong>Green</strong> - Standard GTFS transit data models</li>
-<li><strong>Orange</strong> - Wrangler-enhanced GTFS models with additional fields</li>
+<li>🟣 <strong>Purple</strong> - Roadway network data models  </li>
+<li>🟢 <strong>Green</strong> - Standard GTFS transit data models</li>
+<li>🟠 <strong>Orange</strong> - Wrangler-enhanced GTFS models with additional fields</li>
+</ul>
+<h3 id="dbmodelmixin-inheritance-diagrams">DBModelMixin Inheritance Diagrams<a class="headerlink" href="#dbmodelmixin-inheritance-diagrams" title="Permanent link"> ¶</a></h3>
+<div class="mermaid">%%{init: {'theme':'base', 'themeVariables': {'fontSize': '12px'}}}%%
+graph TD
+    A["DBModelMixin"]
+    A --&gt; B["GtfsModel"]
+    A --&gt; C["Feed"]
+    A --&gt; D["MockDBModel"]
+
+    click A "../api/#network_wrangler.models._base.db.DBModelMixin"
+    click B "../api_transit/#network_wrangler.models.gtfs.gtfs.GtfsModel"
+    click C "../api_transit/#network_wrangler.transit.feed.feed.Feed"
+
+    classDef mixin fill:#fff3e0,stroke:#e65100,stroke-width:3px
+    classDef gtfs fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef wrangler fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef test fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+
+    class A mixin
+    class B gtfs
+    class C wrangler
+    class D test</div>
+<p><strong>Legend:</strong></p>
+<ul>
+<li>🟠 <strong>DBModelMixin</strong> - Base mixin for managing interrelated DataFrameModel tables</li>
+<li>🟢 <strong>GtfsModel</strong> - Pure GTFS feed data wrapper</li>
+<li>🔵 <strong>Feed</strong> - Wrangler-enhanced GTFS feed with additional functionality</li>
+<li>🟣 <strong>MockDBModel</strong> - Test implementation (not shown in API docs)</li>
 </ul>
 <p>💡 <strong>Tip:</strong> Click on any box in the diagrams to jump directly to that class’s documentation!</p>
 </article>
