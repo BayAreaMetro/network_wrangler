@@ -150,8 +150,40 @@ graph TD
 **Legend:**
 
 - 🔗 **DataFrameModel** - External pandera base class (links to pandera docs)
-- **Purple** - Roadway network data models  
-- **Green** - Standard GTFS transit data models
-- **Orange** - Wrangler-enhanced GTFS models with additional fields
+- 🟣 **Purple** - Roadway network data models  
+- 🟢 **Green** - Standard GTFS transit data models
+- 🟠 **Orange** - Wrangler-enhanced GTFS models with additional fields
+
+### DBModelMixin Inheritance Diagrams
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': {'fontSize': '12px'}}}%%
+graph TD
+    A["DBModelMixin"]
+    A --> B["GtfsModel"]
+    A --> C["Feed"]
+    A --> D["MockDBModel"]
+    
+    click A "../api/#network_wrangler.models._base.db.DBModelMixin"
+    click B "../api_transit/#network_wrangler.models.gtfs.gtfs.GtfsModel"
+    click C "../api_transit/#network_wrangler.transit.feed.feed.Feed"
+    
+    classDef mixin fill:#fff3e0,stroke:#e65100,stroke-width:3px
+    classDef gtfs fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef wrangler fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef test fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    
+    class A mixin
+    class B gtfs
+    class C wrangler
+    class D test
+```
+
+**Legend:**
+
+- 🟠 **DBModelMixin** - Base mixin for managing interrelated DataFrameModel tables
+- 🟢 **GtfsModel** - Pure GTFS feed data wrapper
+- 🔵 **Feed** - Wrangler-enhanced GTFS feed with additional functionality
+- 🟣 **MockDBModel** - Test implementation (not shown in API docs)
 
 💡 **Tip:** Click on any box in the diagrams to jump directly to that class's documentation!
