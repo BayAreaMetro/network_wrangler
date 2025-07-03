@@ -252,16 +252,23 @@
     </label>
 <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix="">
 <li class="md-nav__item">
-<a class="md-nav__link" href="#roadway-data-models">
+<a class="md-nav__link" href="#network-containment-diagram">
 <span class="md-ellipsis">
-      Roadway Data Models
+      Network Containment Diagram
     </span>
 </a>
 </li>
 <li class="md-nav__item">
-<a class="md-nav__link" href="#transitgtfs-data-models">
+<a class="md-nav__link" href="#roadway-inheritance-diagrams">
 <span class="md-ellipsis">
-      Transit/GTFS Data Models
+      Roadway Inheritance Diagrams
+    </span>
+</a>
+</li>
+<li class="md-nav__item">
+<a class="md-nav__link" href="#transitgtfs-inheritance-diagrams">
+<span class="md-ellipsis">
+      Transit/GTFS Inheritance Diagrams
     </span>
 </a>
 </li>
@@ -342,9 +349,82 @@
 <div class="md-content" data-md-component="content">
 <article class="md-content__inner md-typeset">
 <h1 id="data-models">Data Models<a class="headerlink" href="#data-models" title="Permanent link"> ¶</a></h1>
-<p>Network Wrangler uses <a href="https://pandera.readthedocs.io/en/stable/reference/generated/pandera.api.pandas.model.DataFrameModel.html">pandera’s DataFrameModel</a> as the base class for all data validation models. The following diagrams show the inheritance hierarchy of all DataFrameModel subclasses in the codebase:</p>
-<h3 id="roadway-data-models">Roadway Data Models<a class="headerlink" href="#roadway-data-models" title="Permanent link"> ¶</a></h3>
-<div class="mermaid">graph TD
+<p>Network Wrangler uses <a href="https://pandera.readthedocs.io/en/stable/reference/generated/pandera.api.pandas.model.DataFrameModel.html">pandera’s DataFrameModel</a> as the base class for all data validation models. The following diagrams show how the core network classes contain these data models and their inheritance relationships:</p>
+<h3 id="network-containment-diagram">Network Containment Diagram<a class="headerlink" href="#network-containment-diagram" title="Permanent link"> ¶</a></h3>
+<div class="mermaid">%%{init: {'theme':'base', 'themeVariables': {'fontSize': '12px'}}}%%
+graph TD
+    S[Scenario]
+
+    S --&gt; RN
+
+    subgraph "RoadwayNetwork"
+        RN[RoadwayNetwork]
+        RL[nodes_df: RoadNodesTable]
+        RK[links_df: RoadLinksTable] 
+        RS[shapes_df: RoadShapesTable]
+        RN -.-&gt; RL
+        RN -.-&gt; RK
+        RN -.-&gt; RS
+    end
+
+    %% Force vertical spacing
+    SPACER1[" "]
+    SPACER2[" "]
+
+    RN --&gt; SPACER1
+    SPACER1 --&gt; SPACER2
+    SPACER2 --&gt; TN
+
+    subgraph "TransitNetwork"
+        TN[TransitNetwork]
+        F[Feed]
+        TS[stops: WranglerStopsTable]
+        TR[routes: RoutesTable]
+        TT[trips: WranglerTripsTable]
+        TST[stop_times: WranglerStopTimesTable]
+        TSH[shapes: WranglerShapesTable]
+        TF[frequencies: WranglerFrequenciesTable]
+        TA[agencies: AgenciesTable]
+        TN -.-&gt; F
+        F -.-&gt; TS
+        F -.-&gt; TR
+        F -.-&gt; TT
+        F -.-&gt; TST
+        F -.-&gt; TSH
+        F -.-&gt; TF
+        F -.-&gt; TA
+    end
+
+    %% Hide spacers
+    style SPACER1 fill:transparent,stroke:transparent
+    style SPACER2 fill:transparent,stroke:transparent
+
+    click S "../api/#network_wrangler.scenario"
+    click RN "../api/#network_wrangler.roadway.network"
+    click TN "../api/#network_wrangler.transit.network"
+    click F "../api_transit/#network_wrangler.transit.feed.feed.Feed"
+    click RL "../api_roadway/#network_wrangler.models.roadway.tables.RoadNodesTable"
+    click RK "../api_roadway/#network_wrangler.models.roadway.tables.RoadLinksTable"
+    click RS "../api_roadway/#network_wrangler.models.roadway.tables.RoadShapesTable"
+    click TS "../api_transit/#network_wrangler.models.gtfs.tables.WranglerStopsTable"
+    click TR "../api_transit/#network_wrangler.models.gtfs.tables.RoutesTable"
+    click TT "../api_transit/#network_wrangler.models.gtfs.tables.WranglerTripsTable"
+    click TST "../api_transit/#network_wrangler.models.gtfs.tables.WranglerStopTimesTable"
+    click TSH "../api_transit/#network_wrangler.models.gtfs.tables.WranglerShapesTable"
+    click TF "../api_transit/#network_wrangler.models.gtfs.tables.WranglerFrequenciesTable"
+    click TA "../api_transit/#network_wrangler.models.gtfs.tables.AgenciesTable"
+
+    classDef core fill:#e3f2fd,stroke:#1976d2,stroke-width:3px
+    classDef container fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef roadway fill:#e8f5e8,stroke:#388e3c,stroke-width:2px
+    classDef transit fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+
+    class S,RN,TN,F core
+    class RL,RK,RS roadway
+    class TS,TR,TT,TST,TSH,TF,TA transit</div>
+<h3 id="roadway-inheritance-diagrams">Roadway Inheritance Diagrams<a class="headerlink" href="#roadway-inheritance-diagrams" title="Permanent link"> ¶</a></h3>
+<div class="mermaid">%%{init: {'theme':'base', 'themeVariables': {'fontSize': '12px'}}}%%
+graph TD
     A["DataFrameModel"]
     A --&gt; B["RoadLinksTable"]
     A --&gt; C["RoadNodesTable"]
@@ -364,8 +444,9 @@
 
     class A pandera
     class B,C,D,E,F roadway</div>
-<h3 id="transitgtfs-data-models">Transit/GTFS Data Models<a class="headerlink" href="#transitgtfs-data-models" title="Permanent link"> ¶</a></h3>
-<div class="mermaid">graph TD
+<h3 id="transitgtfs-inheritance-diagrams">Transit/GTFS Inheritance Diagrams<a class="headerlink" href="#transitgtfs-inheritance-diagrams" title="Permanent link"> ¶</a></h3>
+<div class="mermaid">%%{init: {'theme':'base', 'themeVariables': {'fontSize': '12px'}}}%%
+graph TD
     A["DataFrameModel"]
     A --&gt; B["AgenciesTable"]
     A --&gt; C["StopsTable"]
@@ -410,28 +491,6 @@
 <li><strong>Orange</strong> - Wrangler-enhanced GTFS models with additional fields</li>
 </ul>
 <p>💡 <strong>Tip:</strong> Click on any box in the diagrams to jump directly to that class’s documentation!</p>
-<div class="mermaid">classDiagram
-    class RoadwayNetwork
-    RoadwayNetwork : nodes_df
-    RoadwayNetwork : links_df
-    RoadwayNetwork : shapes_df
-    RoadwayNetwork : model_net()
-
-    class RoadNodesTable
-
-    class RoadLinksTable
-
-    class RoadShapesTable
-
-    RoadwayNetwork --* RoadNodesTable
-    RoadwayNetwork --* RoadLinksTable
-    RoadwayNetwork --* RoadShapesTable
-
-    link RoadwayNetwork "../api_roadway/#network_wrangler.roadway.networks.RoadwayNetwork"
-    link RoadNodesTable "../api_roadway/#network_wrangler.models.roadway.RoadNodesTable"
-    link RoadLinksTable "../api_roadway/#network_wrangler.models.roadway.RoadLinksTable"
-    link RoadShapestable "../api_roadway/#network_wrangler.models.roadway.RoadShapestable"
-</div>
 </article>
 </div>
 <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var tab,labels=set.querySelector(".tabbed-labels");for(tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
