@@ -34,9 +34,7 @@ def load_feed_from_path(
     file_format: TransitFileTypes = "txt",
     wrangler_flavored: bool = True
 ) -> Union[Feed, GtfsModel]:
-    """Create a [Feed][network_wrangler.transit.feed.feed.Feed] or 
-    [GtfsModel][network_wrangler.models.gtfs.gtfs.GtfsModel] object
-    from the path to a GTFS transit feed.
+    """Create a Feed or GtfsModel object from the path to a GTFS transit feed.
 
     Args:
         feed_path (Union[Path, str]): The path to the GTFS transit feed.
@@ -100,14 +98,12 @@ def _read_table_from_file(table: str, file: Path) -> pd.DataFrame:
 
 
 def load_feed_from_dfs(feed_dfs: dict, wrangler_flavored: bool = True) -> Union[Feed, GtfsModel]:
-    """Create a [Feed][network_wrangler.transit.feed.feed.Feed] or 
-    [GtfsModel][network_wrangler.models.gtfs.gtfs.GtfsModel] object 
-    from a dictionary of DataFrames representing a GTFS feed.
+    """Create a Feed or GtfsModel object from a dictionary of DataFrames representing a GTFS feed.
 
     Args:
         feed_dfs (dict): A dictionary containing DataFrames representing the tables of a GTFS feed.
-        wrangler_flavored: If True, creates a Wrangler-enhanced [Feed][] object.
-                          If False, creates a pure [GtfsModel] object. Defaults to True.
+        wrangler_flavored: If True, creates a Wrangler-enhanced Feed] object.
+                           If False, creates a pure GtfsModel object. Defaults to True.
 
     Returns:
         Union[Feed, GtfsModel]: A Feed or GtfsModel object representing the transit network.
@@ -127,8 +123,7 @@ def load_feed_from_dfs(feed_dfs: dict, wrangler_flavored: bool = True) -> Union[
     feed = load_feed_from_dfs(feed_dfs)  # Creates Feed by default
     gtfs_model = load_feed_from_dfs(feed_dfs, wrangler_flavored=False)  # Creates GtfsModel
     ```
-
-        """
+    """
     # Use the appropriate model class based on the parameter
     model_class = Feed if wrangler_flavored else GtfsModel
     
