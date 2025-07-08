@@ -60,6 +60,7 @@ plugins:
             - https://docs.python.org/3/objects.inv
             - https://docs.pydantic.dev/latest/objects.inv
             - https://pandera.readthedocs.io/en/stable/objects.inv
+            - https://pandas.pydata.org/docs/objects.inv
           options:
             docstring_section_style: list
             show_source: true
