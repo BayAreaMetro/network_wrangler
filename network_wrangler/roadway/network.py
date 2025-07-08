@@ -137,7 +137,7 @@ class RoadwayNetwork(BaseModel):
     Attributes:
         nodes_df (RoadNodesTable): dataframe of of node records.
         links_df (RoadLinksTable): dataframe of link records and associated properties.
-        shapes_df (RoadShapestable): data from of detailed shape records  This is lazily
+        shapes_df (RoadShapesTable): dataframe of detailed shape records  This is lazily
             created iff it is called because shapes files can be expensive to read.
         _selections (dict): dictionary of stored roadway selection objects, mapped by
             `RoadwayLinkSelection.sel_key` or `RoadwayNodeSelection.sel_key` in case they are

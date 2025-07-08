@@ -2,7 +2,7 @@
 
 The module includes the following classes:
 
-- AgencyTable: Optional. Represents the Agency table in the GTFS dataset.
+- [AgenciesTable][network_wrangler.models.gtfs.tables.AgenciesTable]: Optional. Represents the Agency table in the GTFS dataset.
 - WranglerStopsTable: Represents the Stops table in the GTFS dataset.
 - RoutesTable: Represents the Routes table in the GTFS dataset.
 - WranglerShapesTable: Represents the Shapes table in the GTFS dataset.

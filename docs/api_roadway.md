@@ -14,6 +14,7 @@ Submodules which define and extend the links, nodes, and shapes dataframe object
 ::: network_wrangler.models.roadway.tables
     options:
         heading_level: 3
+        filters: ["!Config"]
 
 ::: network_wrangler.models.roadway.types
     options:

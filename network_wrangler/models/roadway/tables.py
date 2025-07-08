@@ -138,7 +138,7 @@ class RoadLinksTable(DataFrameModel):
     | Time- and/or category-dependent value for managed lane | `sc_ML_lanes` | `sc_ML_price` |
 
 
-    ??? note "previous format for scoped properties"
+    !!! note "previous format for scoped properties"
 
         Some previous tooling was developed around a previous method for serializing scoped properties.  In order to retain compatability with this format:
 
@@ -329,7 +329,7 @@ RoadNodesAttrs = {
 
 
 class RoadNodesTable(DataFrameModel):
-    """Datamodel used to validate if links_df is of correct format and types.
+    """Datamodel used to validate if nodes_df is of correct format and types.
 
     Must have a record for each node used by the `links` table and by the transit `shapes`, `stop_times`, and `stops` tables.
 

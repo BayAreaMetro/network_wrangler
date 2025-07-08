@@ -61,7 +61,8 @@ def load_roadway(
             a dictionary, a path to a file, or a list of paths to files or a
             WranglerConfig instance. Defaults to None and will load defaults.
 
-    Returns: a RoadwayNetwork instance
+    Returns: 
+        (RoadwayNetwork) instance of RoadwayNetwork
     """
     from .network import RoadwayNetwork  # noqa: PLC0415
 
@@ -186,7 +187,8 @@ def load_roadway_from_dir(
             a dictionary, a path to a file, or a list of paths to files or a
             WranglerConfig instance. Defaults to None and will load defaults.
 
-    Returns: a RoadwayNetwork instance
+    Returns: 
+        (RoadwayNetwork) instance of RoadwayNetwork
     """
     links_file, nodes_file, shapes_file = id_roadway_file_paths_in_dir(dir, file_format)
 

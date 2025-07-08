@@ -27,6 +27,7 @@ Classes and utilities for configuring Network Wrangler behavior:
 ::: network_wrangler.configs.scenario
     options:
         heading_level: 3
+        filters: ["!__init__"]
 ::: network_wrangler.configs.utils
     options:
         heading_level: 3
