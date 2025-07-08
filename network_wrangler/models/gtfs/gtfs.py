@@ -23,7 +23,7 @@ class GtfsModel(DBModelMixin):
 
     This is the pure GTFS model version of [Feed][network_wrangler.transit.feed.feed.Feed]
 
-    Most functionality derives from mixin class 
+    Most functionality derives from mixin class
     [`DBModelMixin`][network_wrangler.models._base.db.DBModelMixin] which provides:
 
     - validation of tables to schemas when setting a table attribute (e.g. self.trips = trips_df)

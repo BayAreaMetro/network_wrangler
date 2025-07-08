@@ -30,9 +30,9 @@ def _feed_path_ref(path: Path) -> Path:
 
 
 def load_feed_from_path(
-    feed_path: Union[Path, str], 
+    feed_path: Union[Path, str],
     file_format: TransitFileTypes = "txt",
-    wrangler_flavored: bool = True
+    wrangler_flavored: bool = True,
 ) -> Union[Feed, GtfsModel]:
     """Create a Feed or GtfsModel object from the path to a GTFS transit feed.
 
@@ -59,7 +59,6 @@ def load_feed_from_path(
         table: list(feed_path.glob(f"*{table}.{file_format}")) for table in model_class.table_names
     }
     WranglerLogger.debug(f"model_class={model_class}  feed_possible_files={feed_possible_files}")
-
 
     # make sure we have all the tables we need
     _missing_files = [t for t, v in feed_possible_files.items() if not v]
@@ -126,7 +125,7 @@ def load_feed_from_dfs(feed_dfs: dict, wrangler_flavored: bool = True) -> Union[
     """
     # Use the appropriate model class based on the parameter
     model_class = Feed if wrangler_flavored else GtfsModel
-    
+
     if not all(table in feed_dfs for table in model_class.table_names):
         model_name = "Feed" if wrangler_flavored else "GtfsModel"
         msg = f"feed_dfs must contain the following tables for {model_name}: {model_class.table_names}"

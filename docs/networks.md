@@ -57,9 +57,9 @@ These are valid `geojson`, `shp`, or `parquet` file.
 
 See:
 
-- [`RoadNodesTable`](api_roadway.md#network_wrangler.models.roadway.tables.RoadNodesTable) 
-- [`RoadLinksTable`](api_roadway.md#network_wrangler.models.roadway.tables.RoadLinksTable) 
-- [`RoadShapesTable`](api_roadway.md#network_wrangler.models.roadway.tables.RoadShapesTable) 
+- [`RoadNodesTable`](api_roadway.md#network_wrangler.models.roadway.tables.RoadNodesTable)
+- [`RoadLinksTable`](api_roadway.md#network_wrangler.models.roadway.tables.RoadLinksTable)
+- [`RoadShapesTable`](api_roadway.md#network_wrangler.models.roadway.tables.RoadShapesTable)
 
 ## Transit Network Format
 

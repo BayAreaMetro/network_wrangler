@@ -11,8 +11,10 @@ links_df = edit_link_property(links_df, link_idx, "lanes", {"set": 2})
 # Returns copy of links_df with price reduced by 50 for links in link_idx and raises error
 # if existing value doesn't match 100
 links_df = edit_link_properties(
-    links_df, link_idx, "price",
-    {"existing": 100,"change":-50},
+    links_df,
+    link_idx,
+    "price",
+    {"existing": 100, "change": -50},
 )
 # Returns copy of links_df with geometry of links with node_ids updated based on nodes_df
 links_df = edit_link_geometry_from_nodes(links_df, nodes_df, node_ids)
