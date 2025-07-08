@@ -64,8 +64,10 @@ def setup_logging(
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(FORMAT)
     WranglerLogger.addHandler(console_handler)
-    if std_out_level in ("debug", "info"):
+    if std_out_level == "debug":
         console_handler.setLevel(logging.DEBUG)
+    elif std_out_level == "info":
+        console_handler.setLevel(logging.INFO)
     elif std_out_level == "warning":
         console_handler.setLevel(logging.WARNING)
     else:
