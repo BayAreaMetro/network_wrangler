@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional, Union
 import pyarrow as pa
 import pyarrow.parquet as pq
 from geopandas import GeoDataFrame
+from pandas import DataFrame
 
 from ..configs import ConfigInputTypes, DefaultConfig, WranglerConfig, load_wrangler_config
 from ..logger import WranglerLogger
@@ -117,6 +118,63 @@ def load_roadway(
         roadway_network._shapes_file = shapes_file
     roadway_network._links_file = links_file
     roadway_network._nodes_file = nodes_file
+
+    return roadway_network
+
+
+def load_roadway_from_dataframes(
+    links_df: DataFrame,
+    nodes_df: DataFrame,
+    shapes_df: Optional[GeoDataFrame] = None,
+    config: ConfigInputTypes = DefaultConfig,
+) -> RoadwayNetwork:
+    """Creates a RoadwayNetwork from DataFrames with validation.
+
+    Validates the DataFrames against their respective Pandera schemas before
+    creating the network instance. This method is useful if the user is already working with
+    networks in DataFrames and doesn't want to write it to disk just to read it again.
+
+    Args:
+        links_df: DataFrame containing roadway links data
+        nodes_df: DataFrame containing roadway nodes data
+        shapes_df: Optional GeoDataFrame containing roadway shapes data
+        config: a Configuration object to update with the new configuration. Can be
+            a dictionary, a path to a file, or a list of paths to files or a
+            WranglerConfig instance. Defaults to None and will load defaults.
+
+    Returns:
+        (RoadwayNetwork) instance with validated data
+    """
+    from ..models.roadway.tables import (  # noqa: PLC0415
+        RoadLinksTable,
+        RoadNodesTable,
+        RoadShapesTable,
+    )
+    from ..utils.models import validate_df_to_model  # noqa: PLC0415
+    from .network import RoadwayNetwork  # noqa: PLC0415
+
+    if not isinstance(config, WranglerConfig):
+        config = load_wrangler_config(config)
+
+    # Validate DataFrames against Pandera schemas
+    WranglerLogger.debug("Validating nodes_df against RoadNodesTable schema")
+    validated_nodes_df = validate_df_to_model(nodes_df, RoadNodesTable)
+
+    WranglerLogger.debug("Validating links_df against RoadLinksTable schema")
+    validated_links_df = validate_df_to_model(links_df, RoadLinksTable)
+
+    validated_shapes_df = None
+    if shapes_df is not None:
+        WranglerLogger.debug("Validating shapes_df against RoadShapesTable schema")
+        validated_shapes_df = validate_df_to_model(shapes_df, RoadShapesTable)
+
+    # Create RoadwayNetwork with validated DataFrames
+    roadway_network = RoadwayNetwork(
+        links_df=validated_links_df,
+        nodes_df=validated_nodes_df,
+        shapes_df=validated_shapes_df,
+        config=config,
+    )
 
     return roadway_network
 
