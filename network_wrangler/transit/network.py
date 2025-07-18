@@ -67,7 +67,7 @@ class TransitNetwork:
     ```
 
     Attributes:
-        feed: gtfs feed object with interlinked tables.
+        feed (Feed): Feed object with interlinked tables.
         road_net (RoadwayNetwork): Associated roadway network object.
         graph (nx.MultiDiGraph): Graph for associated roadway network object.
         config (WranglerConfig): Configuration object for the transit network.
