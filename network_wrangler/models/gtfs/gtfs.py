@@ -35,7 +35,8 @@ class GtfsModel(DBModelMixin):
     Attributes:
         table_names (list[str]): list of table names in GTFS feed.
         tables (list[DataFrame]): list tables as dataframes.
-        stop_times (DataFrame[StopTimesTable]): stop_times dataframe with roadway node_ids
+        agency (DataFrame[AgenciesTable]): agency dataframe
+        stop_times (DataFrame[StopTimesTable]): stop_times dataframe
         stops (DataFrame[WranglerStopsTable]): stops dataframe
         shapes (DataFrame[ShapesTable]): shapes dataframe
         trips (DataFrame[TripsTable]): trips dataframe
@@ -47,7 +48,7 @@ class GtfsModel(DBModelMixin):
     # the ordering here matters because the stops need to be added before stop_times if
     # stop times needs to be converted
     _table_models: ClassVar[dict] = {
-        "agencies": AgenciesTable,
+        "agency": AgenciesTable,
         "frequencies": FrequenciesTable,
         "routes": RoutesTable,
         "shapes": ShapesTable,
@@ -57,6 +58,7 @@ class GtfsModel(DBModelMixin):
     }
 
     table_names: ClassVar[list[str]] = [
+        "agency",
         "routes",
         "shapes",
         "stops",
@@ -64,7 +66,7 @@ class GtfsModel(DBModelMixin):
         "stop_times",
     ]
 
-    optional_table_names: ClassVar[list[str]] = ["agencies", "frequencies"]
+    optional_table_names: ClassVar[list[str]] = ["frequencies"]
 
     def __init__(self, **kwargs):
         """Initialize GTFS model."""
