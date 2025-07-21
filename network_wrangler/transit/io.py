@@ -42,7 +42,7 @@ def load_feed_from_path(
         file_format: the format of the files to read. Defaults to "txt"
         wrangler_flavored: If True, creates a Wrangler-enhanced Feed object.
                           If False, creates a pure GtfsModel object. Defaults to True.
-        service_ids_filter (DataFrame): If not None, filter to these service_ids
+        service_ids_filter (DataFrame): If not None, filter to these service_ids. Assumes service_id is a str.
 
     Returns:
         Union[Feed, GtfsModel]: The Feed or GtfsModel object created from the GTFS transit feed.
@@ -89,6 +89,7 @@ def load_feed_from_path(
         
         # filter to trips for these service_ids
         original_trip_count = len(feed_dfs['trips'])
+        feed_dfs['trips']['service_id'] = feed_dfs['trips']['service_id'].astype(str)  # make service_id a string
         feed_dfs['trips'] = feed_dfs['trips'].merge(right=service_ids_filter, on='service_id', how='left', indicator=True)
         WranglerLogger.debug(f"feed_dfs['trips']._merge.value_counts():\n{feed_dfs['trips']._merge.value_counts()}")
         feed_dfs['trips'] = feed_dfs['trips'].loc[ feed_dfs['trips']._merge == 'both'].drop(columns=['_merge']).reset_index(drop=True)
@@ -96,13 +97,23 @@ def load_feed_from_path(
         WranglerLogger.debug(f"feed_dfs['trips']:\n{feed_dfs['trips']}")
 
         # filter stop_times for these trip_ids
-        feed_dfs['stop_times'] = feed_dfs['stop_times'].merge(right=feed_dfs['trips']['trip_id'].drop_duplicates(), how='left', indicator=True)
+        feed_dfs['trips']['trip_id'] = feed_dfs['trips']['trip_id'].astype(str)  # make trips.trip_id a string
+        trip_ids = feed_dfs['trips'][['trip_id']].drop_duplicates().reset_index(drop=True)
+        WranglerLogger.debug(f"After filtering trips to trip_ids (len={len(trip_ids):,}), trip_ids=\n{trip_ids}")
+
+        feed_dfs['stop_times']['trip_id'] = feed_dfs['stop_times']['trip_id'].astype(str)  # make stop_times.trip_id a string
+        feed_dfs['stop_times'] = feed_dfs['stop_times'].merge(right=trip_ids, how='left', indicator=True)
         WranglerLogger.debug(f"feed_dfs['stop_times']._merge.value_counts():\n{feed_dfs['stop_times']._merge.value_counts()}")
         feed_dfs['stop_times'] = feed_dfs['stop_times'].loc[ feed_dfs['stop_times']._merge == 'both'].drop(columns=['_merge']).reset_index(drop=True)
         WranglerLogger.debug(f"feed_dfs['stop_times']:\n{feed_dfs['stop_times']}")
 
         # filter stops for these stop_ids
-        feed_dfs['stops'] = feed_dfs['stops'].merge(right=feed_dfs['stop_times']['stop_id'].drop_duplicates(), how='left', indicator=True)
+        feed_dfs['stop_times']['stop_id'] = feed_dfs['stop_times']['stop_id'].astype(str)  # make stop_times.stop_id a string
+        stop_ids = feed_dfs['stop_times'][['stop_id']].drop_duplicates().reset_index(drop=True)
+        WranglerLogger.debug(f"After filtering stop_times to stop_ids (len={len(stop_ids):,}), stop_ids=\n{stop_ids}")
+
+        feed_dfs['stops']['stop_id'] = feed_dfs['stops']['stop_id'].astype(str)  # make stops.stop_id a string
+        feed_dfs['stops'] = feed_dfs['stops'].merge(right=stop_ids, how='left', indicator=True)
         WranglerLogger.debug(f"feed_dfs['stops']._merge.value_counts():\n{feed_dfs['stops']._merge.value_counts()}")
         feed_dfs['stops'] = feed_dfs['stops'].loc[ feed_dfs['stops']._merge == 'both'].drop(columns=['_merge']).reset_index(drop=True)
         WranglerLogger.debug(f"feed_dfs['stops']:\n{feed_dfs['stops']}")
@@ -111,7 +122,9 @@ def load_feed_from_path(
         valid_stop_ids = set(feed_dfs['stops']['stop_id'])
         invalid_mask = ~feed_dfs['stop_times']['stop_id'].isin(valid_stop_ids)
         invalid_stop_times = feed_dfs['stop_times'][invalid_mask]
+        WranglerLogger.info(f"Found {len(invalid_stop_times):,} stop_times entries with invalid stop_ids after filtering")
         
+        # This shouldn't happen if the data is valid but leaving the logging in just in case
         if len(invalid_stop_times) > 0:
             WranglerLogger.warning(f"Found {len(invalid_stop_times):,} stop_times entries with invalid stop_ids after filtering")
             
