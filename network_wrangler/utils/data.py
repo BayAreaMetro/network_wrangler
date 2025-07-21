@@ -675,8 +675,7 @@ def fk_in_pk(
 
     if missing_flag.any():
         WranglerLogger.warning(
-            f"Following keys referenced in {fk.name} but missing in\
-            primary key table: \n{fk[missing_flag]} "
+            f"Following keys referenced in {fk.name} but missing in primary key {pk.name} table:\n{fk[missing_flag]}"
         )
         return False, fk[missing_flag].tolist()
 

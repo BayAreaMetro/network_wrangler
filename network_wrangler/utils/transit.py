@@ -201,6 +201,7 @@ def create_feed_from_gtfs_model(
             WranglerLogger.warning(f"  - {len(far_bus_stops)} are bus stops far from drive-accessible nodes")
     
     # convert gtfs_model to use those new stops
+    WranglerLogger.debug(f"Before convert_stops_to_wrangler_stops(), stops_df:\n{stops_df}")
     feed_tables['stops'] = convert_stops_to_wrangler_stops(stops_df)
     WranglerLogger.debug(f"After convert_stops_to_wrangler_stops(), feed_tables['stops']:\n{feed_tables['stops']}")
     
