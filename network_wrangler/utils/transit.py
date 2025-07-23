@@ -15,7 +15,8 @@ from .time import time_to_seconds, seconds_to_time
 
 def create_frequencies_from_stop_times(
         feed_tables: Dict[str, pd.DataFrame],
-        time_periods: List[Dict[str, str]]
+        time_periods: List[Dict[str, str]],
+        default_frequency_for_onetime_route: int = 10800
     ) -> pd.DataFrame:
     """Create a frequencies table from feed stop_times data.
     
@@ -29,6 +30,8 @@ def create_frequencies_from_stop_times(
         time_periods (List[Dict[str, str]]): List of time period definitions.
             Each dict should have 'start_time' and 'end_time' keys.
             Example: [{'start_time': '06:00:00', 'end_time': '10:00:00'}, ...]
+        default_frequency_for_onetime_route (int, optional): Default headway in seconds
+            for routes with only one trip in a period. Defaults to 10800 (3 hours).
             
     Returns:
         pd.DataFrame: Frequencies table with columns:
@@ -40,7 +43,7 @@ def create_frequencies_from_stop_times(
             
     Notes:
         - Groups trips by route and stop pattern to handle different service patterns
-        - For routes with only one trip in a period, uses a default 3-hour headway
+        - For routes with only one trip in a period, uses the default_frequency_for_onetime_route
         - Handles time periods that cross midnight (e.g., '19:00:00' to '03:00:00')
         - Returns empty DataFrame if no frequency data can be calculated
     """
@@ -130,14 +133,16 @@ def create_frequencies_from_stop_times(
                     WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}: no departures in period {period['start_time']}-{period['end_time']}, skipping")
                     continue
                 elif len(period_departures) == 1:
-                    # For single trip, use 3-hour default headway
-                    avg_headway = 10800  # 3 hours in seconds
-                    WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}: only 1 departure in period {period['start_time']}-{period['end_time']}, using default 3-hour headway")
+                    # For single trip, use default headway
+                    avg_headway = default_frequency_for_onetime_route
+                    WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}: only 1 departure in period {period['start_time']}-{period['end_time']}, using default {default_frequency_for_onetime_route/3600:.1f}-hour headway")
                 else:
                     # Calculate average headway for multiple trips
                     headways = np.diff(np.sort(period_departures))
                     avg_headway = int(np.mean(headways))
                     WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}: {len(period_departures)} departure in period {period['start_time']}-{period['end_time']}, period_departures={period_departures} headways={headways} avg_headway={avg_headway}")
+                    # this can happen if there are two trips and they leave at the same times
+                    if avg_headway == 0: avg_headway = default_frequency_for_onetime_route
                 
                 frequencies_data.append({
                     'trip_id': template_trip_id,
@@ -240,7 +245,8 @@ def analyze_frequency_coverage(
 def create_feed_from_gtfs_model(
         gtfs_model: GtfsModel,
         roadway_net: RoadwayNetwork,
-        time_periods: Optional[List[Dict[str, str]]] = None
+        time_periods: Optional[List[Dict[str, str]]] = None,
+        default_frequency_for_onetime_route: int = 10800
     ) -> Feed:
     """Converts a GTFS feed to a Wrangler Feed object compatible with the given RoadwayNetwork.
 
@@ -251,6 +257,8 @@ def create_feed_from_gtfs_model(
             Each dict should have 'start_time' and 'end_time' keys.
             Example: [{'start_time': '03:00:00', 'end_time': '06:00:00'}, ...]
             If None, frequencies table will not be created from stop_times.
+        default_frequency_for_onetime_route (int, optional): Default headway in seconds
+            for routes with only one trip in a period. Defaults to 10800 (3 hours).
 
     Returns:
         Feed: Wrangler Feed object with stops mapped to roadway network nodes
@@ -449,7 +457,7 @@ def create_feed_from_gtfs_model(
         feed_tables['frequencies'] = gtfs_model.frequencies.copy()
     elif time_periods is not None and hasattr(gtfs_model, 'stop_times') and gtfs_model.stop_times is not None:
         # Create frequencies table from actual stop_times data
-        frequencies_df = create_frequencies_from_stop_times(feed_tables, time_periods)
+        frequencies_df = create_frequencies_from_stop_times(feed_tables, time_periods, default_frequency_for_onetime_route)
         if not frequencies_df.empty:
             feed_tables['frequencies'] = frequencies_df
             
