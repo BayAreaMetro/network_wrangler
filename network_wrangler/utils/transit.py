@@ -10,6 +10,232 @@ from ..models.gtfs.gtfs import GtfsModel
 from ..transit.feed.feed import Feed
 from ..roadway.network import RoadwayNetwork
 from ..models.gtfs.converters import convert_stops_to_wrangler_stops, convert_stop_times_to_wrangler_stop_times
+from .time import time_to_seconds, seconds_to_time
+
+
+def create_frequencies_from_stop_times(
+        feed_tables: Dict[str, pd.DataFrame],
+        time_periods: List[Dict[str, str]]
+    ) -> pd.DataFrame:
+    """Create a frequencies table from feed stop_times data.
+    
+    This function analyzes actual trip departure times in the feed data and calculates
+    average headways for each route pattern within specified time periods.
+    
+    Args:
+        feed_tables (Dict[str, pd.DataFrame]): Dictionary of feed tables including:
+            - 'stop_times': Wrangler-formatted stop times table
+            - 'trips': Trips table with route information
+        time_periods (List[Dict[str, str]]): List of time period definitions.
+            Each dict should have 'start_time' and 'end_time' keys.
+            Example: [{'start_time': '06:00:00', 'end_time': '10:00:00'}, ...]
+            
+    Returns:
+        pd.DataFrame: Frequencies table with columns:
+            - trip_id: Template trip ID for this frequency entry
+            - start_time: Start time of the period
+            - end_time: End time of the period  
+            - headway_secs: Average headway in seconds
+            - exact_times: Always 0 (frequency-based service)
+            
+    Notes:
+        - Groups trips by route and stop pattern to handle different service patterns
+        - For routes with only one trip in a period, uses a default 3-hour headway
+        - Handles time periods that cross midnight (e.g., '19:00:00' to '03:00:00')
+        - Returns empty DataFrame if no frequency data can be calculated
+    """
+    WranglerLogger.info("Creating frequencies table from feed stop_times data")
+    
+    stop_times_df = feed_tables['stop_times'].copy()
+    trips_df = feed_tables['trips'].copy()
+    
+    stop_times_df['departure_seconds'] = stop_times_df['departure_time'].apply(time_to_seconds)
+    
+    # Get first stop for each trip to use as the reference time
+    first_stops = stop_times_df.groupby('trip_id')['departure_seconds'].min().reset_index()
+    first_stops.columns = ['trip_id', 'first_departure_seconds']
+    
+    # Join with trips to get route info
+    trips_with_times = pd.merge(
+        first_stops,
+        trips_df[['trip_id', 'route_id']],
+        on='trip_id',
+        how='left'
+    )
+    
+    frequencies_data = []
+    
+    # Get stop patterns for all trips to identify distinct patterns
+    # Note: In wrangler format, model_node_id is renamed to stop_id
+    stop_sequences = stop_times_df.groupby('trip_id')['stop_id'].apply(list).reset_index()
+    stop_sequences.columns = ['trip_id', 'stop_sequence']
+    stop_sequences['stop_pattern'] = stop_sequences['stop_sequence'].apply(lambda x: ','.join(map(str, x)))
+    
+    # Join with trip times
+    trips_with_patterns = pd.merge(
+        trips_with_times,
+        stop_sequences[['trip_id', 'stop_pattern']],
+        on='trip_id',
+        how='left'
+    )
+    WranglerLogger.debug(f"create_frequencies_from_stop_times(): trips_with_patterns=\n{trips_with_patterns}")
+    
+    # Process each route
+    for route_id, route_trips in trips_with_patterns.groupby('route_id'):
+        if len(route_trips) == 0:
+            WranglerLogger.debug(f"Route {route_id}: no trips found, skipping")
+            continue
+            
+        # Find distinct stop patterns for this route
+        pattern_groups = route_trips.groupby('stop_pattern')
+        num_patterns = len(pattern_groups)
+        
+        if num_patterns > 1:
+            WranglerLogger.info(f"Route {route_id}: Found {num_patterns} distinct stop patterns")
+        
+        # Process each pattern separately
+        for pattern_idx, (stop_pattern, pattern_trips) in enumerate(pattern_groups):
+            if len(pattern_trips) == 0:
+                continue
+            
+            # Sort trips by departure time
+            pattern_trips = pattern_trips.sort_values('first_departure_seconds')
+            departures = pattern_trips['first_departure_seconds'].values
+            
+            # Use first trip of this pattern as template
+            template_trip_id = pattern_trips.iloc[0]['trip_id']
+            
+            # Log pattern info
+            num_stops = len(stop_pattern.split(','))
+            WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}/{num_patterns}: {len(pattern_trips)} trips, {num_stops} stops, template trip {template_trip_id}")
+            
+            # Calculate headways for each time period
+            for period in time_periods:
+                start_seconds = time_to_seconds(period['start_time'])
+                end_seconds = time_to_seconds(period['end_time'])
+                
+                # Handle periods that cross midnight
+                if end_seconds <= start_seconds:
+                    # Period crosses midnight
+                    period_departures = departures[
+                        (departures >= start_seconds) | (departures < end_seconds)
+                    ]
+                else:
+                    # Normal period
+                    period_departures = departures[
+                        (departures >= start_seconds) & (departures < end_seconds)
+                    ]
+                
+                if len(period_departures) == 0:
+                    WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}: no departures in period {period['start_time']}-{period['end_time']}, skipping")
+                    continue
+                elif len(period_departures) == 1:
+                    # For single trip, use 3-hour default headway
+                    avg_headway = 10800  # 3 hours in seconds
+                    WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}: only 1 departure in period {period['start_time']}-{period['end_time']}, using default 3-hour headway")
+                else:
+                    # Calculate average headway for multiple trips
+                    headways = np.diff(np.sort(period_departures))
+                    avg_headway = int(np.mean(headways))
+                    WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}: {len(period_departures)} departure in period {period['start_time']}-{period['end_time']}, period_departures={period_departures} headways={headways} avg_headway={avg_headway}")
+                
+                frequencies_data.append({
+                    'trip_id': template_trip_id,
+                    'start_time': period['start_time'],
+                    'end_time': period['end_time'],
+                    'headway_secs': avg_headway,
+                    'exact_times': 0
+                })
+                
+                WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1} period {period['start_time']}-{period['end_time']}: {len(period_departures)} trips, avg headway {avg_headway//60:.1f} min")
+    
+    if frequencies_data:
+        frequencies_df = pd.DataFrame(frequencies_data)
+        WranglerLogger.info(f"Created frequencies table with {len(frequencies_df)} entries from stop_times data")
+        WranglerLogger.debug(f"frequencies_df.loc[frequencies_df.trip_id=='AC:11539040:20231031']:\n{frequencies_df.loc[frequencies_df.trip_id=='AC:11539040:20231031']}")
+        WranglerLogger.debug(f"feed_tables['trips'].loc[ feed_tables['trips'].trip_id=='AC:11539040:20231031']:\n{feed_tables['trips'].loc[ feed_tables['trips'].trip_id=='AC:11539040:20231031']}")
+        WranglerLogger.debug(f"feed_tables['stop_times']:\n{feed_tables['stop_times']}")
+        return frequencies_df
+    else:
+        WranglerLogger.warning("No frequency data could be calculated from stop_times")
+        return pd.DataFrame()
+
+
+def analyze_frequency_coverage(
+        gtfs_model: GtfsModel,
+        frequencies_df: pd.DataFrame
+    ) -> pd.DataFrame:
+    """Analyze how well template trips in frequencies table cover all trips.
+    
+    Args:
+        gtfs_model (GtfsModel): GTFS model with trips and stop_times data
+        frequencies_df (pd.DataFrame): Frequencies table with template trip_ids
+        
+    Returns:
+        pd.DataFrame: Coverage statistics by route with columns:
+            - route_id: Route identifier
+            - total_trips: Total number of trips for the route
+            - total_patterns: Total number of distinct stop patterns
+            - covered_patterns: Number of patterns covered by template trips
+            - covered_trips: Number of trips covered by template patterns
+            - coverage_pct: Percentage of trips covered
+    """
+    # Get stop patterns for all trips
+    stop_sequences = gtfs_model.stop_times.groupby('trip_id')['stop_id'].apply(list).reset_index()
+    stop_sequences.columns = ['trip_id', 'stop_sequence']
+    stop_sequences['stop_pattern'] = stop_sequences['stop_sequence'].apply(lambda x: ','.join(x))
+    
+    # Get all trips and their patterns
+    all_trip_patterns = pd.merge(
+        gtfs_model.trips[['trip_id', 'route_id']],
+        stop_sequences[['trip_id', 'stop_pattern']],
+        on='trip_id',
+        how='left'
+    )
+    
+    # Get template trips and their patterns
+    template_trip_patterns = all_trip_patterns[all_trip_patterns['trip_id'].isin(frequencies_df['trip_id'].unique())]
+    
+    # Analyze coverage by route
+    coverage_stats = []
+    for route_id in all_trip_patterns['route_id'].unique():
+        route_all_trips = all_trip_patterns[all_trip_patterns['route_id'] == route_id]
+        route_template_trips = template_trip_patterns[template_trip_patterns['route_id'] == route_id]
+        
+        total_trips = len(route_all_trips)
+        total_patterns = route_all_trips['stop_pattern'].nunique()
+        covered_patterns = route_template_trips['stop_pattern'].nunique()
+        
+        # Count trips covered by template patterns
+        covered_trip_count = route_all_trips[
+            route_all_trips['stop_pattern'].isin(route_template_trips['stop_pattern'])
+        ]['trip_id'].nunique()
+        
+        coverage_pct = (covered_trip_count / total_trips * 100) if total_trips > 0 else 0
+        
+        coverage_stats.append({
+            'route_id': route_id,
+            'total_trips': total_trips,
+            'total_patterns': total_patterns,
+            'covered_patterns': covered_patterns,
+            'covered_trips': covered_trip_count,
+            'coverage_pct': coverage_pct
+        })
+        
+        if covered_patterns < total_patterns:
+            WranglerLogger.warning(f"Route {route_id}: {covered_patterns}/{total_patterns} stop patterns covered by template trips ({coverage_pct:.1f}% of trips)")
+    
+    # Summary statistics
+    coverage_df = pd.DataFrame(coverage_stats)
+    avg_coverage = coverage_df['coverage_pct'].mean()
+    routes_with_incomplete_coverage = len(coverage_df[coverage_df['coverage_pct'] < 100])
+    
+    WranglerLogger.info(f"Pattern coverage summary: {avg_coverage:.1f}% average trip coverage across all routes")
+    if routes_with_incomplete_coverage > 0:
+        WranglerLogger.warning(f"{routes_with_incomplete_coverage} routes have incomplete pattern coverage")
+        
+    return coverage_df
+
 
 def create_feed_from_gtfs_model(
         gtfs_model: GtfsModel,
@@ -223,181 +449,13 @@ def create_feed_from_gtfs_model(
         feed_tables['frequencies'] = gtfs_model.frequencies.copy()
     elif time_periods is not None and hasattr(gtfs_model, 'stop_times') and gtfs_model.stop_times is not None:
         # Create frequencies table from actual stop_times data
-        WranglerLogger.info("Creating frequencies table from GTFS stop_times data")
-        
-        # Convert time strings to seconds for easier calculation
-        def time_to_seconds(time_obj):
-            """Convert HH:MM:SS or Timestamp to seconds since midnight"""
-            if isinstance(time_obj, str):
-                h, m, s = map(int, time_obj.split(':'))
-                return h * 3600 + m * 60 + s
-            else:
-                # Handle pandas Timestamp or datetime objects
-                return time_obj.hour * 3600 + time_obj.minute * 60 + time_obj.second
-        
-        def seconds_to_time(seconds):
-            """Convert seconds since midnight to HH:MM:SS"""
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            secs = seconds % 60
-            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-        
-        stop_times_df = gtfs_model.stop_times.copy()
-        stop_times_df['departure_seconds'] = stop_times_df['departure_time'].apply(time_to_seconds)
-        
-        # Get first stop for each trip to use as the reference time
-        first_stops = stop_times_df.groupby('trip_id')['departure_seconds'].min().reset_index()
-        first_stops.columns = ['trip_id', 'first_departure_seconds']
-        
-        # Join with trips to get route info
-        trips_with_times = pd.merge(
-            first_stops,
-            gtfs_model.trips[['trip_id', 'route_id']],
-            on='trip_id',
-            how='left'
-        )
-        
-        frequencies_data = []
-        
-        # Get stop patterns for all trips to identify distinct patterns
-        stop_sequences = gtfs_model.stop_times.groupby('trip_id')['stop_id'].apply(list).reset_index()
-        stop_sequences.columns = ['trip_id', 'stop_sequence']
-        stop_sequences['stop_pattern'] = stop_sequences['stop_sequence'].apply(lambda x: ','.join(x))
-        
-        # Join with trip times
-        trips_with_patterns = pd.merge(
-            trips_with_times,
-            stop_sequences[['trip_id', 'stop_pattern']],
-            on='trip_id',
-            how='left'
-        )
-        
-        # Process each route
-        for route_id, route_trips in trips_with_patterns.groupby('route_id'):
-            if len(route_trips) == 0:
-                WranglerLogger.debug(f"Route {route_id}: no trips found, skipping")
-                continue
-                
-            # Find distinct stop patterns for this route
-            pattern_groups = route_trips.groupby('stop_pattern')
-            num_patterns = len(pattern_groups)
-            
-            if num_patterns > 1:
-                WranglerLogger.info(f"Route {route_id}: Found {num_patterns} distinct stop patterns")
-            
-            # Process each pattern separately
-            for pattern_idx, (stop_pattern, pattern_trips) in enumerate(pattern_groups):
-                if len(pattern_trips) == 0:
-                    continue
-                    
-                # Sort trips by departure time
-                pattern_trips = pattern_trips.sort_values('first_departure_seconds')
-                departures = pattern_trips['first_departure_seconds'].values
-                
-                # Use first trip of this pattern as template
-                template_trip_id = pattern_trips.iloc[0]['trip_id']
-                
-                # Log pattern info
-                num_stops = len(stop_pattern.split(','))
-                WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}/{num_patterns}: {len(pattern_trips)} trips, {num_stops} stops, template trip {template_trip_id}")
-                
-                # Calculate headways for each time period
-                for period in time_periods:
-                    start_seconds = time_to_seconds(period['start_time'])
-                    end_seconds = time_to_seconds(period['end_time'])
-                    
-                    # Handle periods that cross midnight
-                    if end_seconds <= start_seconds:
-                        # Period crosses midnight
-                        period_departures = departures[
-                            (departures >= start_seconds) | (departures < end_seconds)
-                        ]
-                    else:
-                        # Normal period
-                        period_departures = departures[
-                            (departures >= start_seconds) & (departures < end_seconds)
-                        ]
-                    
-                    if len(period_departures) == 0:
-                        WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}: no departures in period {period['start_time']}-{period['end_time']}, skipping")
-                        continue
-                    elif len(period_departures) == 1:
-                        # For single trip, use 3-hour default headway
-                        avg_headway = 10800  # 3 hours in seconds
-                        WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1}: only 1 departure in period {period['start_time']}-{period['end_time']}, using default 3-hour headway")
-                    else:
-                        # Calculate average headway for multiple trips
-                        headways = np.diff(np.sort(period_departures))
-                        avg_headway = int(np.mean(headways))
-                    
-                    frequencies_data.append({
-                        'trip_id': template_trip_id,
-                        'start_time': period['start_time'],
-                        'end_time': period['end_time'],
-                        'headway_secs': avg_headway,
-                        'exact_times': 0
-                    })
-                    
-                    WranglerLogger.debug(f"Route {route_id} pattern {pattern_idx + 1} period {period['start_time']}-{period['end_time']}: {len(period_departures)} trips, avg headway {avg_headway//60:.1f} min")
-        
-        if frequencies_data:
-            frequencies_df = pd.DataFrame(frequencies_data)
+        frequencies_df = create_frequencies_from_stop_times(feed_tables, time_periods)
+        if not frequencies_df.empty:
             feed_tables['frequencies'] = frequencies_df
-            WranglerLogger.info(f"Created frequencies table with {len(frequencies_df)} entries from stop_times data")
             
-            # Report on pattern coverage
+            # Analyze pattern coverage
             WranglerLogger.info("Analyzing trip coverage by stop patterns...")
-            
-            # Get all trips and their patterns
-            all_trip_patterns = pd.merge(
-                gtfs_model.trips[['trip_id', 'route_id']],
-                stop_sequences[['trip_id', 'stop_pattern']],
-                on='trip_id',
-                how='left'
-            )
-            
-            # Get template trips and their patterns
-            template_trip_patterns = all_trip_patterns[all_trip_patterns['trip_id'].isin(frequencies_df['trip_id'].unique())]
-            
-            # Analyze coverage by route
-            coverage_stats = []
-            for route_id in all_trip_patterns['route_id'].unique():
-                route_all_trips = all_trip_patterns[all_trip_patterns['route_id'] == route_id]
-                route_template_trips = template_trip_patterns[template_trip_patterns['route_id'] == route_id]
-                
-                total_trips = len(route_all_trips)
-                total_patterns = route_all_trips['stop_pattern'].nunique()
-                covered_patterns = route_template_trips['stop_pattern'].nunique()
-                
-                # Count trips covered by template patterns
-                covered_trip_count = route_all_trips[
-                    route_all_trips['stop_pattern'].isin(route_template_trips['stop_pattern'])
-                ]['trip_id'].nunique()
-                
-                coverage_pct = (covered_trip_count / total_trips * 100) if total_trips > 0 else 0
-                
-                coverage_stats.append({
-                    'route_id': route_id,
-                    'total_trips': total_trips,
-                    'total_patterns': total_patterns,
-                    'covered_patterns': covered_patterns,
-                    'covered_trips': covered_trip_count,
-                    'coverage_pct': coverage_pct
-                })
-                
-                if covered_patterns < total_patterns:
-                    WranglerLogger.warning(f"Route {route_id}: {covered_patterns}/{total_patterns} stop patterns covered by template trips ({coverage_pct:.1f}% of trips)")
-            
-            # Summary statistics
-            coverage_df = pd.DataFrame(coverage_stats)
-            avg_coverage = coverage_df['coverage_pct'].mean()
-            routes_with_incomplete_coverage = len(coverage_df[coverage_df['coverage_pct'] < 100])
-            
-            WranglerLogger.info(f"Pattern coverage summary: {avg_coverage:.1f}% average trip coverage across all routes")
-            if routes_with_incomplete_coverage > 0:
-                WranglerLogger.warning(f"{routes_with_incomplete_coverage} routes have incomplete pattern coverage")
-        else:
-            WranglerLogger.warning("No frequency data could be calculated from stop_times")
+            coverage_df = analyze_frequency_coverage(gtfs_model, frequencies_df)
 
     # route gtfs buses, cable cars and light rail along roadway network
     # Handle shapes - map shape points to all roadway nodes (not just drive-accessible)
