@@ -14,7 +14,7 @@ def setup_logging(
     info_log_filename: Optional[Path] = None,
     debug_log_filename: Optional[Path] = None,
     std_out_level: str = "info",
-    file_mode: str = 'a'
+    file_mode: str = "a",
 ):
     """Sets up the WranglerLogger w.r.t. the debug file location and if logging to console.
 
