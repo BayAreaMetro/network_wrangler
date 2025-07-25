@@ -17,6 +17,13 @@ from ..roadway.network import RoadwayNetwork
 from ..transit.feed.feed import Feed
 from .time import seconds_to_time, time_to_seconds
 
+# GTFS route types that operate at street level and need drive-accessible stops
+# Route type 0: Tram, Streetcar, Light rail - operates in mixed traffic
+# Route type 3: Bus - operates on streets
+# Route type 5: Cable tram/Cable car - street-level rail with underground cable
+# Route type 11: Trolleybus - electric buses with overhead wires
+STREET_LEVEL_ROUTE_TYPES = [0, 3, 5, 11]
+
 
 def create_frequencies_from_stop_times(
     feed_tables: Dict[str, pd.DataFrame],
@@ -314,27 +321,45 @@ def create_feed_from_gtfs_model(
 
     # Prepare different node sets for different route types
     drive_accessible_nodes = None
+    transit_accessible_nodes = None
+    
     if "drive_access" in links_df.columns:
-        # Get nodes that are connected by drive-accessible links (for buses)
+        # Get nodes that are connected by drive-accessible links (for street-level transit)
         drive_links = links_df[links_df["drive_access"] == True]
         drive_accessible_node_ids = set(drive_links["A"].unique()) | set(drive_links["B"].unique())
         drive_accessible_nodes = all_nodes_df[
             all_nodes_df["model_node_id"].isin(drive_accessible_node_ids)
         ].copy()
         WranglerLogger.info(
-            f"Found {len(drive_accessible_nodes):,} drive-accessible nodes (for buses) out of {len(all_nodes_df):,} total"
+            f"Found {len(drive_accessible_nodes):,} drive-accessible nodes (for street-level transit) out of {len(all_nodes_df):,} total"
         )
     else:
         WranglerLogger.warning(
             "No drive_access column found in links, all nodes will be used for all route types"
         )
         drive_accessible_nodes = all_nodes_df.copy()
+    
+    # Get nodes connected by transit links (for rail/subway)
+    if "transit" in links_df.columns:
+        transit_links = links_df[links_df["transit"] == True]
+        transit_accessible_node_ids = set(transit_links["A"].unique()) | set(transit_links["B"].unique())
+        transit_accessible_nodes = all_nodes_df[
+            all_nodes_df["model_node_id"].isin(transit_accessible_node_ids)
+        ].copy()
+        WranglerLogger.info(
+            f"Found {len(transit_accessible_nodes):,} transit-accessible nodes (for rail/subway) out of {len(all_nodes_df):,} total"
+        )
+    else:
+        WranglerLogger.info(
+            "No transit column found in links, all nodes will be used for non-street transit"
+        )
+        transit_accessible_nodes = all_nodes_df.copy()
 
     # create mapping from gtfs_model stop to RoadwayNetwork nodes
     # GtfsModel guarantees stops exists
     stops_df = gtfs_model.stops.copy()
 
-    # Determine which stops are used by buses vs other route types
+    # Determine which stops are used by street-level transit vs other route types
     # Need to join stops -> stop_times -> trips -> routes to get route types
     WranglerLogger.info("Determining route types that serve each stop")
 
@@ -370,17 +395,17 @@ def create_feed_from_gtfs_model(
     stop_route_types_agg = (
         stop_route_types.groupby("stop_id")["route_type"].apply(list).reset_index()
     )
-    stop_route_types_agg["has_bus"] = stop_route_types_agg["route_type"].apply(
-        lambda x: 3 in x
-    )  # Route type 3 is bus
+    stop_route_types_agg["has_street_transit"] = stop_route_types_agg["route_type"].apply(
+        lambda x: any(rt in x for rt in STREET_LEVEL_ROUTE_TYPES)
+    )  # Check for street-level route types
 
     # Merge back to stops
     stops_df = pd.merge(
-        stops_df, stop_route_types_agg[["stop_id", "has_bus"]], on="stop_id", how="left"
+        stops_df, stop_route_types_agg[["stop_id", "has_street_transit"]], on="stop_id", how="left"
     )
 
     # Check for stops without route type info
-    unmatched_stops = stops_df[stops_df["has_bus"].isna()]
+    unmatched_stops = stops_df[stops_df["has_street_transit"].isna()]
     if len(unmatched_stops) > 0:
         WranglerLogger.warning(
             f"{len(unmatched_stops)} stops have no route type information (not found in stop_times)"
@@ -389,19 +414,19 @@ def create_feed_from_gtfs_model(
             f"Example unmatched stops: {unmatched_stops['stop_id'].head().tolist()}"
         )
 
-    stops_df["has_bus"] = stops_df["has_bus"].fillna(False)
+    stops_df["has_street_transit"] = stops_df["has_street_transit"].fillna(False)
 
-    bus_stops = stops_df[stops_df["has_bus"]]
-    non_bus_stops = stops_df[~stops_df["has_bus"]]
+    street_transit_stops = stops_df[stops_df["has_street_transit"]]
+    non_street_transit_stops = stops_df[~stops_df["has_street_transit"]]
     WranglerLogger.info(
-        f"Found {len(bus_stops):,} stops served by buses, {len(non_bus_stops):,} stops served by other modes"
+        f"Found {len(street_transit_stops):,} stops served by street-level transit, {len(non_street_transit_stops):,} stops served by other modes"
     )
 
     # Log some examples
-    if len(bus_stops) > 0:
-        WranglerLogger.debug(f"Example bus stops: {bus_stops['stop_id'].head().tolist()}")
-    if len(non_bus_stops) > 0:
-        WranglerLogger.debug(f"Example non-bus stops: {non_bus_stops['stop_id'].head().tolist()}")
+    if len(street_transit_stops) > 0:
+        WranglerLogger.debug(f"Example street-level transit stops: {street_transit_stops['stop_id'].head().tolist()}")
+    if len(non_street_transit_stops) > 0:
+        WranglerLogger.debug(f"Example non-street transit stops: {non_street_transit_stops['stop_id'].head().tolist()}")
 
     # Create GeoDataFrames for spatial matching
     stop_geometry = [
@@ -428,9 +453,20 @@ def create_feed_from_gtfs_model(
         )
     else:
         drive_nodes_gdf = gpd.GeoDataFrame(drive_accessible_nodes, crs="EPSG:4326")
+        
+    if "geometry" not in transit_accessible_nodes.columns:
+        node_geometry = [
+            Point(x, y) for x, y in zip(transit_accessible_nodes["X"], transit_accessible_nodes["Y"])
+        ]
+        transit_nodes_gdf = gpd.GeoDataFrame(
+            transit_accessible_nodes, geometry=node_geometry, crs="EPSG:4326"
+        )
+    else:
+        transit_nodes_gdf = gpd.GeoDataFrame(transit_accessible_nodes, crs="EPSG:4326")
 
     all_nodes_gdf_proj = all_nodes_gdf.to_crs("EPSG:2227")
     drive_nodes_gdf_proj = drive_nodes_gdf.to_crs("EPSG:2227")
+    transit_nodes_gdf_proj = transit_nodes_gdf.to_crs("EPSG:2227")
 
     # Use spatial index for efficient nearest neighbor search
     import numpy as np
@@ -441,62 +477,104 @@ def create_feed_from_gtfs_model(
     # Build spatial indices
     all_node_coords = np.array([(geom.x, geom.y) for geom in all_nodes_gdf_proj.geometry])
     drive_node_coords = np.array([(geom.x, geom.y) for geom in drive_nodes_gdf_proj.geometry])
+    transit_node_coords = np.array([(geom.x, geom.y) for geom in transit_nodes_gdf_proj.geometry])
 
     all_nodes_tree = BallTree(all_node_coords)
     drive_nodes_tree = BallTree(drive_node_coords)
+    transit_nodes_tree = BallTree(transit_node_coords)
 
     # Initialize results
     stops_df["model_node_id"] = None
     stops_df["match_distance_ft"] = None
+    
+    # Identify station stops (stops with "station" in the name, case-insensitive)
+    stops_df["is_station"] = stops_df["stop_name"].str.lower().str.contains("station", na=False)
 
-    # Match bus stops to drive-accessible nodes
-    if len(bus_stops) > 0:
-        bus_stop_indices = stops_df[stops_df["has_bus"]].index
-        bus_stop_coords = np.array(
-            [(geom.x, geom.y) for geom in stops_gdf_proj.loc[bus_stop_indices].geometry]
+    # Match street-level transit stops
+    if len(street_transit_stops) > 0:
+        # Split street transit stops into station and non-station stops
+        street_station_mask = stops_df["has_street_transit"] & stops_df["is_station"]
+        street_non_station_mask = stops_df["has_street_transit"] & ~stops_df["is_station"]
+        
+        street_station_indices = stops_df[street_station_mask].index
+        street_non_station_indices = stops_df[street_non_station_mask].index
+        
+        # Log counts
+        WranglerLogger.info(
+            f"Street-level transit stops: {len(street_station_indices):,} stations, {len(street_non_station_indices):,} non-stations"
+        )
+        
+        # Match street-level stations to transit nodes
+        if len(street_station_indices) > 0:
+            street_station_coords = np.array(
+                [(geom.x, geom.y) for geom in stops_gdf_proj.loc[street_station_indices].geometry]
+            )
+            WranglerLogger.debug(
+                f"Matching {len(street_station_coords):,} street-level station stops to {len(transit_nodes_gdf):,} transit-accessible nodes"
+            )
+            distances, indices = transit_nodes_tree.query(street_station_coords, k=1)
+            
+            for i, stop_idx in enumerate(street_station_indices):
+                stops_df.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
+                    "model_node_id"
+                ]
+                stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+            
+            if len(distances) > 0:
+                station_avg_dist = np.mean(distances)
+                station_max_dist = np.max(distances)
+                WranglerLogger.debug(
+                    f"  Street-level stations - Average distance: {station_avg_dist:.1f} ft, Max distance: {station_max_dist:.1f} ft"
+                )
+        
+        # Match street-level non-station stops to drive nodes
+        if len(street_non_station_indices) > 0:
+            street_non_station_coords = np.array(
+                [(geom.x, geom.y) for geom in stops_gdf_proj.loc[street_non_station_indices].geometry]
+            )
+            WranglerLogger.debug(
+                f"Matching {len(street_non_station_coords):,} street-level non-station stops to {len(drive_nodes_gdf):,} drive-accessible nodes"
+            )
+            distances, indices = drive_nodes_tree.query(street_non_station_coords, k=1)
+            
+            for i, stop_idx in enumerate(street_non_station_indices):
+                stops_df.loc[stop_idx, "model_node_id"] = drive_nodes_gdf.iloc[indices[i][0]][
+                    "model_node_id"
+                ]
+                stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+            
+            if len(distances) > 0:
+                non_station_avg_dist = np.mean(distances)
+                non_station_max_dist = np.max(distances)
+                WranglerLogger.debug(
+                    f"  Street-level non-stations - Average distance: {non_station_avg_dist:.1f} ft, Max distance: {non_station_max_dist:.1f} ft"
+                )
+        
+        WranglerLogger.info(f"Matched {len(street_transit_stops):,} street-level transit stops")
+
+    # Match non-street transit stops to transit-accessible nodes
+    if len(non_street_transit_stops) > 0:
+        non_street_stop_indices = stops_df[~stops_df["has_street_transit"]].index
+        non_street_stop_coords = np.array(
+            [(geom.x, geom.y) for geom in stops_gdf_proj.loc[non_street_stop_indices].geometry]
         )
 
         WranglerLogger.debug(
-            f"Matching {len(bus_stop_coords):,} bus stops to {len(drive_nodes_gdf):,} drive-accessible nodes"
+            f"Matching {len(non_street_stop_coords)} non-street transit stops to {len(transit_nodes_gdf)} transit-accessible nodes"
         )
-        distances, indices = drive_nodes_tree.query(bus_stop_coords, k=1)
+        distances, indices = transit_nodes_tree.query(non_street_stop_coords, k=1)
 
-        for i, stop_idx in enumerate(bus_stop_indices):
-            stops_df.loc[stop_idx, "model_node_id"] = drive_nodes_gdf.iloc[indices[i][0]][
+        for i, stop_idx in enumerate(non_street_stop_indices):
+            stops_df.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
                 "model_node_id"
             ]
             stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
 
-        bus_avg_dist = np.mean(distances)
-        bus_max_dist = np.max(distances)
-        WranglerLogger.info(f"Matched {len(bus_stops):,} bus stops to drive-accessible nodes")
+        non_street_avg_dist = np.mean(distances)
+        non_street_max_dist = np.max(distances)
+        WranglerLogger.info(f"Matched {len(non_street_transit_stops):,} non-street transit stops to transit-accessible nodes")
         WranglerLogger.debug(
-            f"  Bus stops - Average distance: {bus_avg_dist:.1f} ft, Max distance: {bus_max_dist:.1f} ft"
-        )
-
-    # Match non-bus stops to any nodes
-    if len(non_bus_stops) > 0:
-        non_bus_stop_indices = stops_df[~stops_df["has_bus"]].index
-        non_bus_stop_coords = np.array(
-            [(geom.x, geom.y) for geom in stops_gdf_proj.loc[non_bus_stop_indices].geometry]
-        )
-
-        WranglerLogger.debug(
-            f"Matching {len(non_bus_stop_coords)} non-bus stops to {len(all_nodes_gdf)} total nodes"
-        )
-        distances, indices = all_nodes_tree.query(non_bus_stop_coords, k=1)
-
-        for i, stop_idx in enumerate(non_bus_stop_indices):
-            stops_df.loc[stop_idx, "model_node_id"] = all_nodes_gdf.iloc[indices[i][0]][
-                "model_node_id"
-            ]
-            stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
-
-        non_bus_avg_dist = np.mean(distances)
-        non_bus_max_dist = np.max(distances)
-        WranglerLogger.info(f"Matched {len(non_bus_stops):,} non-bus stops to any roadway nodes")
-        WranglerLogger.debug(
-            f"  Non-bus stops - Average distance: {non_bus_avg_dist:.1f} ft, Max distance: {non_bus_max_dist:.1f} ft"
+            f"  Non-street transit stops - Average distance: {non_street_avg_dist:.1f} ft, Max distance: {non_street_max_dist:.1f} ft"
         )
 
     # Log statistics about the matching
@@ -510,10 +588,21 @@ def create_feed_from_gtfs_model(
     far_stops = stops_df[stops_df["match_distance_ft"] > 1000]
     if len(far_stops) > 0:
         WranglerLogger.warning(f"{len(far_stops)} stops are more than 1000 ft from nearest node")
-        far_bus_stops = far_stops[far_stops["has_bus"]]
-        if len(far_bus_stops) > 0:
+        far_street_non_station = far_stops[far_stops["has_street_transit"] & ~far_stops["is_station"]]
+        far_street_station = far_stops[far_stops["has_street_transit"] & far_stops["is_station"]]
+        far_transit_stops = far_stops[~far_stops["has_street_transit"]]
+        
+        if len(far_street_non_station) > 0:
             WranglerLogger.warning(
-                f"  - {len(far_bus_stops)} are bus stops far from drive-accessible nodes"
+                f"  - {len(far_street_non_station)} are street-level non-station stops far from drive-accessible nodes"
+            )
+        if len(far_street_station) > 0:
+            WranglerLogger.warning(
+                f"  - {len(far_street_station)} are street-level station stops far from transit-accessible nodes"
+            )
+        if len(far_transit_stops) > 0:
+            WranglerLogger.warning(
+                f"  - {len(far_transit_stops)} are non-street transit stops far from transit-accessible nodes"
             )
 
     # convert gtfs_model to use those new stops
@@ -552,7 +641,7 @@ def create_feed_from_gtfs_model(
             WranglerLogger.info("Analyzing trip coverage by stop patterns...")
             coverage_df = analyze_frequency_coverage(gtfs_model, frequencies_df)
 
-    # route gtfs buses, cable cars and light rail along roadway network
+    # route gtfs street-level transit (buses, cable cars, and light rail) along roadway network
     # Handle shapes - map shape points to all roadway nodes (not just drive-accessible)
     if hasattr(gtfs_model, "shapes") and gtfs_model.shapes is not None:
         shapes_df = gtfs_model.shapes.copy()
@@ -602,6 +691,7 @@ def create_feed_from_gtfs_model(
             WranglerLogger.info("Shape point mapping complete (using all roadway nodes)")
 
         feed_tables["shapes"] = shapes_df
+        WranglerLogger.debug(f"feed_tables['shapes']=\n{feed_tables['shapes']}")
     else:
         # Create empty shapes table with required columns
         feed_tables["shapes"] = pd.DataFrame(
