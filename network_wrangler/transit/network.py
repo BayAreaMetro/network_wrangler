@@ -140,8 +140,8 @@ class TransitNetwork:
     @road_net.setter
     def road_net(self, road_net_in: RoadwayNetwork):
         if road_net_in is None or road_net_in.__class__.__name__ != "RoadwayNetwork":
-            msg = f"TransitNetwork's road_net: value must be a valid RoadwayNetwork instance. \
-                             This is a {type(road_net_in)}."
+            msg = f"TransitNetwork's road_net: value must be a valid RoadwayNetwork instance." + \
+                  f"This is a {type(road_net_in)}."
             WranglerLogger.error(msg)
             raise TransitValidationError(msg)
         if transit_road_net_consistency(self.feed, road_net_in):
@@ -149,8 +149,8 @@ class TransitNetwork:
             self._stored_road_net_hash = copy.deepcopy(road_net_in.network_hash)
             self._consistent_with_road_net = True
         else:
-            msg = "Can't assign inconsistent RoadwayNetwork - Roadway Network not \
-                   set, but can be referenced separately."
+            msg = "Can't assign inconsistent RoadwayNetwork - Roadway Network not " + \
+                   "set, but can be referenced separately."
             WranglerLogger.error(msg)
             raise TransitRoadwayConsistencyError(msg)
 
