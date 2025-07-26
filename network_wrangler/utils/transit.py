@@ -24,6 +24,12 @@ from .time import seconds_to_time, time_to_seconds
 # Route type 11: Trolleybus - electric buses with overhead wires
 STREET_LEVEL_ROUTE_TYPES = [0, 3, 5, 11]
 
+# GTFS route types that should use connectivity-aware matching
+# Route type 1: Subway, Metro
+# Route type 2: Rail
+# Route type 4: Ferry
+CONNECTIVITY_MATCH_ROUTE_TYPES = [1, 2, 4]
+
 
 def create_frequencies_from_stop_times(
     feed_tables: Dict[str, pd.DataFrame],
@@ -281,6 +287,109 @@ def analyze_frequency_coverage(
     return coverage_df
 
 
+def build_transit_graph(transit_links_df: pd.DataFrame) -> Dict[int, set]:
+    """Build directed adjacency graph from transit links.
+    
+    Args:
+        transit_links_df: DataFrame of links with transit=True, must have columns A and B
+        
+    Returns:
+        Dict mapping node_id to set of reachable node_ids (following link direction)
+    """
+    graph = {}
+    for _, link in transit_links_df.iterrows():
+        node_a, node_b = link['A'], link['B']
+        if node_a not in graph:
+            graph[node_a] = set()
+        if node_b not in graph:
+            graph[node_b] = set()
+        # Only add edge from A to B (directed)
+        graph[node_a].add(node_b)
+    return graph
+
+
+def match_route_stops_with_connectivity(
+    route_stops_df: pd.DataFrame,
+    candidate_nodes_gdf: gpd.GeoDataFrame,
+    transit_graph: Dict[int, set],
+    stops_gdf_proj: gpd.GeoDataFrame,
+    max_distance_ft: float = 5000
+) -> Dict[str, int]:
+    """Match stops for a route considering transit link connectivity.
+    
+    Args:
+        route_stops_df: DataFrame with stops for one route, ordered by stop_sequence
+        candidate_nodes_gdf: GeoDataFrame of candidate nodes (projected coordinates)
+        transit_graph: Adjacency graph of transit links
+        stops_gdf_proj: GeoDataFrame of all stops (projected coordinates)
+        max_distance_ft: Maximum allowed distance from stop to node
+        
+    Returns:
+        Dict mapping stop_id to model_node_id
+    """
+    stop_matches = {}
+    
+    # Get ordered list of stops
+    ordered_stops = route_stops_df.sort_values('stop_sequence')['stop_id'].tolist()
+    
+    if len(ordered_stops) == 0:
+        return stop_matches
+    
+    # For each stop, find candidate nodes within max_distance
+    stop_candidates = {}
+    for stop_id in ordered_stops:
+        stop_geom = stops_gdf_proj.loc[stops_gdf_proj['stop_id'] == stop_id, 'geometry'].iloc[0]
+        distances = candidate_nodes_gdf.geometry.distance(stop_geom)
+        nearby_mask = distances <= max_distance_ft
+        nearby_nodes = candidate_nodes_gdf[nearby_mask]['model_node_id'].tolist()
+        stop_candidates[stop_id] = nearby_nodes
+    
+    # Try to find a connected path through the candidates
+    # Start with the first stop and try each candidate
+    first_stop = ordered_stops[0]
+    for first_node in stop_candidates.get(first_stop, []):
+        matches = {first_stop: first_node}
+        current_node = first_node
+        
+        # Try to match subsequent stops
+        success = True
+        for i in range(1, len(ordered_stops)):
+            stop_id = ordered_stops[i]
+            candidates = stop_candidates.get(stop_id, [])
+            
+            # Find candidates that are connected to current_node
+            connected_candidates = [
+                node for node in candidates 
+                if node in transit_graph.get(current_node, set())
+            ]
+            
+            if connected_candidates:
+                # Choose the closest connected candidate
+                stop_geom = stops_gdf_proj.loc[stops_gdf_proj['stop_id'] == stop_id, 'geometry'].iloc[0]
+                best_node = min(connected_candidates, 
+                              key=lambda n: stop_geom.distance(
+                                  candidate_nodes_gdf[candidate_nodes_gdf['model_node_id'] == n].geometry.iloc[0]
+                              ))
+                matches[stop_id] = best_node
+                current_node = best_node
+            else:
+                # No connected candidate found
+                success = False
+                break
+        
+        if success:
+            return matches, True  # Return True to indicate connectivity matching succeeded
+    
+    # If no connected path found, fall back to nearest node matching
+    for stop_id in ordered_stops:
+        stop_geom = stops_gdf_proj.loc[stops_gdf_proj['stop_id'] == stop_id, 'geometry'].iloc[0]
+        distances = candidate_nodes_gdf.geometry.distance(stop_geom)
+        nearest_idx = distances.idxmin()
+        stop_matches[stop_id] = candidate_nodes_gdf.loc[nearest_idx, 'model_node_id']
+    
+    return stop_matches, False  # Return False to indicate connectivity matching failed
+
+
 def create_feed_from_gtfs_model(
     gtfs_model: GtfsModel,
     roadway_net: RoadwayNetwork,
@@ -487,14 +596,132 @@ def create_feed_from_gtfs_model(
     stops_df["model_node_id"] = None
     stops_df["match_distance_ft"] = None
     
+    # Build transit graph for connectivity-aware matching
+    transit_graph = None
+    connectivity_routes = []
+    route_stop_patterns = {}
+    
+    if "transit" in links_df.columns:
+        transit_links = links_df[links_df["transit"] == True]
+        if len(transit_links) > 0:
+            transit_graph = build_transit_graph(transit_links)
+            WranglerLogger.info(f"Built transit graph with {len(transit_graph)} nodes for connectivity matching")
+    
+    # Handle connectivity-based matching for rail and ferry routes
+    if transit_graph:
+        # Get routes that need connectivity matching
+        connectivity_routes = gtfs_model.routes[
+            gtfs_model.routes['route_type'].isin(CONNECTIVITY_MATCH_ROUTE_TYPES)
+        ]['route_id'].tolist()
+        
+        if connectivity_routes:
+            WranglerLogger.info(f"Processing {len(connectivity_routes)} routes with connectivity-aware matching")
+            
+            # Get trips for these routes
+            connectivity_trips = gtfs_model.trips[
+                gtfs_model.trips['route_id'].isin(connectivity_routes)
+            ]['trip_id'].tolist()
+            
+            # Get stop patterns for these trips
+            connectivity_stop_times = gtfs_model.stop_times[
+                gtfs_model.stop_times['trip_id'].isin(connectivity_trips)
+            ]
+            
+            # Group by route and get unique stop patterns
+            failed_connectivity_routes = []
+            
+            for route_id in connectivity_routes:
+                route_trips = gtfs_model.trips[gtfs_model.trips['route_id'] == route_id]['trip_id']
+                route_stop_times = connectivity_stop_times[
+                    connectivity_stop_times['trip_id'].isin(route_trips)
+                ]
+                
+                # Get the most common stop pattern for this route
+                pattern_groups = route_stop_times.groupby('trip_id')[['stop_id', 'stop_sequence']].apply(
+                    lambda x: x.sort_values('stop_sequence')
+                ).reset_index(level=0, drop=True)
+                
+                # Use the first trip's pattern as representative
+                if len(pattern_groups) > 0:
+                    first_trip = route_trips.iloc[0]
+                    route_stops = route_stop_times[route_stop_times['trip_id'] == first_trip][
+                        ['stop_id', 'stop_sequence']
+                    ].sort_values('stop_sequence')
+                    route_stop_patterns[route_id] = route_stops
+            
+            # Match stops for each route
+            for route_id, route_stops in route_stop_patterns.items():
+                if len(route_stops) > 0:
+                    WranglerLogger.debug(f"Matching {len(route_stops)} stops for route {route_id}")
+                    
+                    # Get route info
+                    route_info = gtfs_model.routes[gtfs_model.routes['route_id'] == route_id].iloc[0]
+                    route_name = route_info.get('route_short_name', route_id)
+                    
+                    # Match stops with connectivity
+                    stop_matches, connectivity_success = match_route_stops_with_connectivity(
+                        route_stops,
+                        transit_nodes_gdf_proj,
+                        transit_graph,
+                        stops_gdf_proj
+                    )
+                    
+                    # Track failed routes
+                    if not connectivity_success:
+                        # Get all trips for this route to get direction_ids
+                        route_trip_info = gtfs_model.trips[gtfs_model.trips['route_id'] == route_id][
+                            ['trip_id', 'direction_id']
+                        ].drop_duplicates('direction_id')
+                        
+                        for _, trip_row in route_trip_info.iterrows():
+                            failed_connectivity_routes.append({
+                                'agency_id': route_info.get('agency_id', 'N/A'),
+                                'route_id': route_id,
+                                'route_short_name': route_info.get('route_short_name', 'N/A'),
+                                'direction_id': trip_row['direction_id']
+                            })
+                    
+                    # Apply matches
+                    for stop_id, node_id in stop_matches.items():
+                        if stop_id in stops_df['stop_id'].values:
+                            stop_idx = stops_df[stops_df['stop_id'] == stop_id].index[0]
+                            stops_df.loc[stop_idx, 'model_node_id'] = node_id
+                            
+                            # Calculate distance
+                            stop_geom = stops_gdf_proj.loc[stop_idx, 'geometry']
+                            node_geom = transit_nodes_gdf_proj[
+                                transit_nodes_gdf_proj['model_node_id'] == node_id
+                            ].geometry.iloc[0]
+                            distance = stop_geom.distance(node_geom)
+                            stops_df.loc[stop_idx, 'match_distance_ft'] = distance
+                    
+                    WranglerLogger.info(f"Matched {len(stop_matches)} stops for route {route_name}")
+            
+            # Log failed connectivity routes
+            if failed_connectivity_routes:
+                WranglerLogger.debug("\n=== Routes that failed connectivity matching ===")
+                WranglerLogger.debug("These routes fell back to nearest-node matching:")
+                for route in failed_connectivity_routes:
+                    WranglerLogger.debug(
+                        f"  Agency: {route['agency_id']}, "
+                        f"Route ID: {route['route_id']}, "
+                        f"Route Name: {route['route_short_name']}, "
+                        f"Direction: {route['direction_id']}"
+                    )
+                WranglerLogger.debug(f"Total: {len(failed_connectivity_routes)} route-directions failed")
+                WranglerLogger.debug("===============================================\n")
+    
     # Identify station stops (stops with "station" in the name, case-insensitive)
     stops_df["is_station"] = stops_df["stop_name"].str.lower().str.contains("station", na=False)
 
-    # Match street-level transit stops
-    if len(street_transit_stops) > 0:
+    # Match remaining street-level transit stops (not already matched by connectivity)
+    unmatched_mask = stops_df["model_node_id"].isna()
+    street_transit_stops_unmatched = street_transit_stops[street_transit_stops.index.isin(stops_df[unmatched_mask].index)]
+    
+    if len(street_transit_stops_unmatched) > 0:
         # Split street transit stops into station and non-station stops
-        street_station_mask = stops_df["has_street_transit"] & stops_df["is_station"]
-        street_non_station_mask = stops_df["has_street_transit"] & ~stops_df["is_station"]
+        street_station_mask = stops_df["has_street_transit"] & stops_df["is_station"] & unmatched_mask
+        street_non_station_mask = stops_df["has_street_transit"] & ~stops_df["is_station"] & unmatched_mask
         
         street_station_indices = stops_df[street_station_mask].index
         street_non_station_indices = stops_df[street_non_station_mask].index
@@ -550,11 +777,13 @@ def create_feed_from_gtfs_model(
                     f"  Street-level non-stations - Average distance: {non_station_avg_dist:.1f} ft, Max distance: {non_station_max_dist:.1f} ft"
                 )
         
-        WranglerLogger.info(f"Matched {len(street_transit_stops):,} street-level transit stops")
+        WranglerLogger.info(f"Matched {len(street_transit_stops_unmatched):,} street-level transit stops (excluding connectivity-matched)")
 
-    # Match non-street transit stops to transit-accessible nodes
-    if len(non_street_transit_stops) > 0:
-        non_street_stop_indices = stops_df[~stops_df["has_street_transit"]].index
+    # Match remaining non-street transit stops to transit-accessible nodes (not already matched by connectivity)
+    non_street_transit_stops_unmatched = non_street_transit_stops[non_street_transit_stops.index.isin(stops_df[unmatched_mask].index)]
+    
+    if len(non_street_transit_stops_unmatched) > 0:
+        non_street_stop_indices = stops_df[~stops_df["has_street_transit"] & unmatched_mask].index
         non_street_stop_coords = np.array(
             [(geom.x, geom.y) for geom in stops_gdf_proj.loc[non_street_stop_indices].geometry]
         )
@@ -580,8 +809,30 @@ def create_feed_from_gtfs_model(
     # Log statistics about the matching
     avg_distance = stops_df["match_distance_ft"].mean()
     max_distance = stops_df["match_distance_ft"].max()
+    
+    # Count stops by matching method
+    connectivity_matched = 0
+    if transit_graph and connectivity_routes:
+        # Count stops that were matched through connectivity
+        connectivity_stop_ids = set()
+        for route_stops in route_stop_patterns.values():
+            connectivity_stop_ids.update(route_stops['stop_id'].tolist())
+        connectivity_matched = len(stops_df[stops_df['stop_id'].isin(connectivity_stop_ids) & stops_df['model_node_id'].notna()])
+    
+    total_matched = stops_df['model_node_id'].notna().sum()
+    regular_matched = total_matched - connectivity_matched
+    
     WranglerLogger.info(
-        f"Stop matching complete. Average distance: {avg_distance:.1f} ft, Max distance: {max_distance:.1f} ft"
+        f"Stop matching complete. Total: {total_matched:,} stops matched"
+    )
+    WranglerLogger.info(
+        f"  - Connectivity-based: {connectivity_matched:,} stops"
+    )
+    WranglerLogger.info(
+        f"  - Nearest-node: {regular_matched:,} stops"
+    )
+    WranglerLogger.info(
+        f"  - Average distance: {avg_distance:.1f} ft, Max distance: {max_distance:.1f} ft"
     )
 
     # Warn about stops that are far from nodes (more than 1000 feet)
