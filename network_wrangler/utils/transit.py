@@ -796,7 +796,7 @@ def create_feed_from_gtfs_model(
                                 stop_name = failure['stop_info'].get(stop_id, stop_id)
                                 if idx < failure['failed_at_stop'] - 1:
                                     # This stop was successfully connected
-                                    WranglerLogger.debug(f"    ✓ Stop {idx + 1}: {stop_name} ({stop_id}) → Node {node_id}")
+                                    WranglerLogger.debug(f"    [OK] Stop {idx + 1}: {stop_name} ({stop_id}) -> Node {node_id}")
                                 elif idx == failure['failed_at_stop'] - 1:
                                     # This is where connectivity failed
                                     candidates = failure['candidates_at_failure']
@@ -804,10 +804,10 @@ def create_feed_from_gtfs_model(
                                         reason = "No nodes within 5000 ft"
                                     else:
                                         reason = f"{candidates} candidates found but none connected from node {failure['last_matched_node']}"
-                                    WranglerLogger.debug(f"    ✗ Stop {idx + 1}: {stop_name} ({stop_id}) - {reason}")
+                                    WranglerLogger.debug(f"    [FAIL] Stop {idx + 1}: {stop_name} ({stop_id}) - {reason}")
                                 else:
                                     # Subsequent stops that weren't attempted for connectivity
-                                    WranglerLogger.debug(f"    - Stop {idx + 1}: {stop_name} ({stop_id}) → Node {node_id} (nearest match)")
+                                    WranglerLogger.debug(f"    [-] Stop {idx + 1}: {stop_name} ({stop_id}) -> Node {node_id} (nearest match)")
                         
                         # Show directions affected
                         directions = [r['direction_id'] for r in route_dirs]
