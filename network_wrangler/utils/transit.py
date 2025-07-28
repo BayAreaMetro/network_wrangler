@@ -1,6 +1,6 @@
 """Utilities for getting GTFS into wrangler"""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import geopandas as gpd
 import numpy as np
@@ -313,8 +313,9 @@ def match_route_stops_with_connectivity(
     candidate_nodes_gdf: gpd.GeoDataFrame,
     transit_graph: Dict[int, set],
     stops_gdf_proj: gpd.GeoDataFrame,
+    stops_df: pd.DataFrame,
     max_distance_ft: float = 5000
-) -> Dict[str, int]:
+) -> Tuple[Dict[str, int], bool, Dict[str, Any]]:
     """Match stops for a route considering transit link connectivity.
     
     Args:
@@ -322,18 +323,33 @@ def match_route_stops_with_connectivity(
         candidate_nodes_gdf: GeoDataFrame of candidate nodes (projected coordinates)
         transit_graph: Adjacency graph of transit links
         stops_gdf_proj: GeoDataFrame of all stops (projected coordinates)
+        stops_df: DataFrame with all stops info including stop names
         max_distance_ft: Maximum allowed distance from stop to node
         
     Returns:
-        Dict mapping stop_id to model_node_id
+        Tuple of:
+        - Dict mapping stop_id to model_node_id
+        - bool indicating if connectivity matching succeeded
+        - Dict with failure details (if failed)
     """
     stop_matches = {}
+    failure_info = {}
     
-    # Get ordered list of stops
-    ordered_stops = route_stops_df.sort_values('stop_sequence')['stop_id'].tolist()
+    # Get ordered list of stops with names
+    ordered_stops_df = route_stops_df.sort_values('stop_sequence')
+    ordered_stops = ordered_stops_df['stop_id'].tolist()
     
     if len(ordered_stops) == 0:
-        return stop_matches
+        return stop_matches, True, failure_info
+    
+    # Get stop names for logging
+    stop_info = {}
+    for stop_id in ordered_stops:
+        stop_data = stops_df[stops_df['stop_id'] == stop_id]
+        if len(stop_data) > 0:
+            stop_info[stop_id] = stop_data.iloc[0]['stop_name']
+        else:
+            stop_info[stop_id] = f"Unknown ({stop_id})"
     
     # For each stop, find candidate nodes within max_distance
     stop_candidates = {}
@@ -347,12 +363,17 @@ def match_route_stops_with_connectivity(
     # Try to find a connected path through the candidates
     # Start with the first stop and try each candidate
     first_stop = ordered_stops[0]
+    best_failure_info = None
+    
     for first_node in stop_candidates.get(first_stop, []):
         matches = {first_stop: first_node}
         current_node = first_node
+        route_progress = [(0, first_stop, first_node, True)]
         
         # Try to match subsequent stops
         success = True
+        failure_idx = -1
+        
         for i in range(1, len(ordered_stops)):
             stop_id = ordered_stops[i]
             candidates = stop_candidates.get(stop_id, [])
@@ -371,14 +392,38 @@ def match_route_stops_with_connectivity(
                                   candidate_nodes_gdf[candidate_nodes_gdf['model_node_id'] == n].geometry.iloc[0]
                               ))
                 matches[stop_id] = best_node
+                route_progress.append((i, stop_id, best_node, True))
                 current_node = best_node
             else:
                 # No connected candidate found
                 success = False
+                failure_idx = i
+                route_progress.append((i, stop_id, None, False))
+                
+                # Track failure details
+                this_failure_info = {
+                    'failed_at_stop': i + 1,  # 1-based for user display
+                    'total_stops': len(ordered_stops),
+                    'last_matched_stop': ordered_stops[i-1] if i > 0 else None,
+                    'last_matched_node': current_node,
+                    'failed_stop': stop_id,
+                    'failed_stop_name': stop_info[stop_id],
+                    'candidates_at_failure': len(candidates),
+                    'route_progress': route_progress,
+                    'stop_info': stop_info
+                }
+                
+                # Keep the failure that got furthest
+                if best_failure_info is None or i > best_failure_info['failed_at_stop'] - 1:
+                    best_failure_info = this_failure_info
                 break
         
         if success:
-            return matches, True  # Return True to indicate connectivity matching succeeded
+            return matches, True, {}  # Return True to indicate connectivity matching succeeded
+    
+    # Use the best failure info if we have one
+    if best_failure_info:
+        failure_info = best_failure_info
     
     # If no connected path found, fall back to nearest node matching
     for stop_id in ordered_stops:
@@ -387,7 +432,7 @@ def match_route_stops_with_connectivity(
         nearest_idx = distances.idxmin()
         stop_matches[stop_id] = candidate_nodes_gdf.loc[nearest_idx, 'model_node_id']
     
-    return stop_matches, False  # Return False to indicate connectivity matching failed
+    return stop_matches, False, failure_info  # Return failure info
 
 
 def create_feed_from_gtfs_model(
@@ -659,11 +704,12 @@ def create_feed_from_gtfs_model(
                     route_name = route_info.get('route_short_name', route_id)
                     
                     # Match stops with connectivity
-                    stop_matches, connectivity_success = match_route_stops_with_connectivity(
+                    stop_matches, connectivity_success, failure_details = match_route_stops_with_connectivity(
                         route_stops,
                         transit_nodes_gdf_proj,
                         transit_graph,
-                        stops_gdf_proj
+                        stops_gdf_proj,
+                        stops_df
                     )
                     
                     # Track failed routes
@@ -678,7 +724,8 @@ def create_feed_from_gtfs_model(
                                 'agency_id': route_info.get('agency_id', 'N/A'),
                                 'route_id': route_id,
                                 'route_short_name': route_info.get('route_short_name', 'N/A'),
-                                'direction_id': trip_row['direction_id']
+                                'direction_id': trip_row['direction_id'],
+                                'failure_details': failure_details
                             })
                     
                     # Apply matches
@@ -701,14 +748,42 @@ def create_feed_from_gtfs_model(
             if failed_connectivity_routes:
                 WranglerLogger.debug("\n=== Routes that failed connectivity matching ===")
                 WranglerLogger.debug("These routes fell back to nearest-node matching:")
+                
+                # Group by route for cleaner output
+                routes_by_id = {}
                 for route in failed_connectivity_routes:
-                    WranglerLogger.debug(
-                        f"  Agency: {route['agency_id']}, "
-                        f"Route ID: {route['route_id']}, "
-                        f"Route Name: {route['route_short_name']}, "
-                        f"Direction: {route['direction_id']}"
-                    )
-                WranglerLogger.debug(f"Total: {len(failed_connectivity_routes)} route-directions failed")
+                    route_key = (route['agency_id'], route['route_id'], route['route_short_name'])
+                    if route_key not in routes_by_id:
+                        routes_by_id[route_key] = []
+                    routes_by_id[route_key].append(route)
+                
+                for (agency_id, route_id, route_name), route_dirs in routes_by_id.items():
+                    WranglerLogger.debug(f"\nAgency: {agency_id}, Route ID: {route_id}, Route Name: {route_name}")
+                    
+                    # Use the first direction's failure details (they should be the same for both directions)
+                    failure = route_dirs[0]['failure_details']
+                    if failure:
+                        WranglerLogger.debug(f"  Failed at stop {failure['failed_at_stop']} of {failure['total_stops']}")
+                        WranglerLogger.debug("  Route portion:")
+                        
+                        # Show route progress
+                        for idx, stop_id, node_id, success in failure['route_progress']:
+                            stop_name = failure['stop_info'].get(stop_id, stop_id)
+                            if success:
+                                WranglerLogger.debug(f"    ✓ Stop {idx + 1}: {stop_name} ({stop_id}) → Node {node_id}")
+                            else:
+                                candidates = failure['candidates_at_failure']
+                                if candidates == 0:
+                                    reason = "No nodes within 5000 ft"
+                                else:
+                                    reason = f"{candidates} candidates found but none connected from node {failure['last_matched_node']}"
+                                WranglerLogger.debug(f"    ✗ Stop {idx + 1}: {stop_name} ({stop_id}) - {reason}")
+                        
+                        # Show directions affected
+                        directions = [r['direction_id'] for r in route_dirs]
+                        WranglerLogger.debug(f"  Directions affected: {', '.join(map(str, directions))}")
+                
+                WranglerLogger.debug(f"\nTotal: {len(failed_connectivity_routes)} route-directions failed")
                 WranglerLogger.debug("===============================================\n")
     
     # Identify station stops (stops with "station" in the name, case-insensitive)
