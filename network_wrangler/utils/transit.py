@@ -441,19 +441,23 @@ def match_route_stops_with_connectivity(
     # If no connected path found, fall back to nearest node matching
     # Also build complete route info showing what would have been matched
     complete_route_progress = []
+    stop_distances = {}
     for i, stop_id in enumerate(ordered_stops):
         stop_geom = stops_gdf_proj.loc[stops_gdf_proj['stop_id'] == stop_id, 'geometry'].iloc[0]
         distances = candidate_nodes_gdf.geometry.distance(stop_geom)
         nearest_idx = distances.idxmin()
         nearest_node = candidate_nodes_gdf.loc[nearest_idx, 'model_node_id']
+        nearest_distance = distances[nearest_idx]
         stop_matches[stop_id] = nearest_node
+        stop_distances[stop_id] = nearest_distance
         
         # Mark whether this stop was part of the connected path attempt
         was_connected = i < len(failure_info.get('route_progress', []))
         complete_route_progress.append((i, stop_id, nearest_node, was_connected))
     
-    # Update failure info with complete route
+    # Update failure info with complete route and distances
     failure_info['complete_route'] = complete_route_progress
+    failure_info['stop_distances'] = stop_distances
     
     return stop_matches, False, failure_info  # Return failure info
 
@@ -807,7 +811,8 @@ def create_feed_from_gtfs_model(
                                     WranglerLogger.debug(f"    [FAIL] Stop {idx + 1}: {stop_name} ({stop_id}) - {reason}")
                                 else:
                                     # Subsequent stops that weren't attempted for connectivity
-                                    WranglerLogger.debug(f"    [-] Stop {idx + 1}: {stop_name} ({stop_id}) -> Node {node_id} (nearest match)")
+                                    distance = failure.get('stop_distances', {}).get(stop_id, 0)
+                                    WranglerLogger.debug(f"    [-] Stop {idx + 1}: {stop_name} ({stop_id}) -> Node {node_id} (nearest match, {distance:.0f} ft)")
                         
                         # Show directions affected
                         directions = [r['direction_id'] for r in route_dirs]
