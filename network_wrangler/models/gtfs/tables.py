@@ -166,14 +166,14 @@ class WranglerStopsTable(StopsTable):
             Default of blank assumes a stop platform.
         parent_station (Optional[int]): The `stop_id` of the parent station. **Since stop_id is an integer in Wrangler, this field is also an integer**
         stop_timezone (Optional[str]): The stop timezone.
-        stop_id_GTFS (Optional[str]): The stop_id from the GTFS data.
+        gtfs_stop_id (Optional[str]): The stop_id from the GTFS data.
         projects (str): A comma-separated string value for projects that have been applied to this stop.
     """
 
     stop_id: Series[int] = Field(
         coerce=True, nullable=False, unique=True, description="The model_node_id."
     )
-    stop_id_GTFS: Series[str] = Field(
+    gtfs_stop_id: Series[str] = Field(
         coerce=True,
         nullable=True,
         description="The stop_id from the GTFS data",
