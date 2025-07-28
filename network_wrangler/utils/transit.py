@@ -424,13 +424,36 @@ def match_route_stops_with_connectivity(
     # Use the best failure info if we have one
     if best_failure_info:
         failure_info = best_failure_info
+    else:
+        # If we didn't even try (no candidates for first stop), create a failure info
+        failure_info = {
+            'failed_at_stop': 1,
+            'total_stops': len(ordered_stops),
+            'last_matched_stop': None,
+            'last_matched_node': None,
+            'failed_stop': first_stop,
+            'failed_stop_name': stop_info[first_stop],
+            'candidates_at_failure': len(stop_candidates.get(first_stop, [])),
+            'route_progress': [(0, first_stop, None, False)],
+            'stop_info': stop_info
+        }
     
     # If no connected path found, fall back to nearest node matching
-    for stop_id in ordered_stops:
+    # Also build complete route info showing what would have been matched
+    complete_route_progress = []
+    for i, stop_id in enumerate(ordered_stops):
         stop_geom = stops_gdf_proj.loc[stops_gdf_proj['stop_id'] == stop_id, 'geometry'].iloc[0]
         distances = candidate_nodes_gdf.geometry.distance(stop_geom)
         nearest_idx = distances.idxmin()
-        stop_matches[stop_id] = candidate_nodes_gdf.loc[nearest_idx, 'model_node_id']
+        nearest_node = candidate_nodes_gdf.loc[nearest_idx, 'model_node_id']
+        stop_matches[stop_id] = nearest_node
+        
+        # Mark whether this stop was part of the connected path attempt
+        was_connected = i < len(failure_info.get('route_progress', []))
+        complete_route_progress.append((i, stop_id, nearest_node, was_connected))
+    
+    # Update failure info with complete route
+    failure_info['complete_route'] = complete_route_progress
     
     return stop_matches, False, failure_info  # Return failure info
 
@@ -766,18 +789,25 @@ def create_feed_from_gtfs_model(
                         WranglerLogger.debug(f"  Failed at stop {failure['failed_at_stop']} of {failure['total_stops']}")
                         WranglerLogger.debug("  Route portion:")
                         
-                        # Show route progress
-                        for idx, stop_id, node_id, success in failure['route_progress']:
-                            stop_name = failure['stop_info'].get(stop_id, stop_id)
-                            if success:
-                                WranglerLogger.debug(f"    ✓ Stop {idx + 1}: {stop_name} ({stop_id}) → Node {node_id}")
-                            else:
-                                candidates = failure['candidates_at_failure']
-                                if candidates == 0:
-                                    reason = "No nodes within 5000 ft"
+                        # Show complete route with connectivity status
+                        route_to_show = failure.get('complete_route', failure.get('route_progress', []))
+                        if route_to_show:
+                            for idx, stop_id, node_id, was_in_connected_attempt in route_to_show:
+                                stop_name = failure['stop_info'].get(stop_id, stop_id)
+                                if idx < failure['failed_at_stop'] - 1:
+                                    # This stop was successfully connected
+                                    WranglerLogger.debug(f"    ✓ Stop {idx + 1}: {stop_name} ({stop_id}) → Node {node_id}")
+                                elif idx == failure['failed_at_stop'] - 1:
+                                    # This is where connectivity failed
+                                    candidates = failure['candidates_at_failure']
+                                    if candidates == 0:
+                                        reason = "No nodes within 5000 ft"
+                                    else:
+                                        reason = f"{candidates} candidates found but none connected from node {failure['last_matched_node']}"
+                                    WranglerLogger.debug(f"    ✗ Stop {idx + 1}: {stop_name} ({stop_id}) - {reason}")
                                 else:
-                                    reason = f"{candidates} candidates found but none connected from node {failure['last_matched_node']}"
-                                WranglerLogger.debug(f"    ✗ Stop {idx + 1}: {stop_name} ({stop_id}) - {reason}")
+                                    # Subsequent stops that weren't attempted for connectivity
+                                    WranglerLogger.debug(f"    - Stop {idx + 1}: {stop_name} ({stop_id}) → Node {node_id} (nearest match)")
                         
                         # Show directions affected
                         directions = [r['direction_id'] for r in route_dirs]
