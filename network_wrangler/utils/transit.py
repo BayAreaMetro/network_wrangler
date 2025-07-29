@@ -586,6 +586,33 @@ def create_feed_from_gtfs_model(
     for rt, count in route_type_counts.items():
         WranglerLogger.debug(f"  Route type {rt}: {count:,} stop-route combinations")
 
+    # Also create stop to agency mapping
+    stop_agencies = pd.merge(
+        stop_trips, 
+        gtfs_model.routes[["route_id", "agency_id", "route_short_name"]], 
+        on="route_id", 
+        how="left"
+    )[["stop_id", "agency_id", "route_short_name"]].drop_duplicates()
+    
+    # If agency table exists, merge in agency names
+    if hasattr(gtfs_model, "agency") and gtfs_model.agency is not None:
+        stop_agencies = pd.merge(
+            stop_agencies,
+            gtfs_model.agency[["agency_id", "agency_name"]],
+            on="agency_id",
+            how="left"
+        )
+    else:
+        stop_agencies["agency_name"] = None
+    
+    # Group by stop to get all agencies and routes serving each stop
+    stop_agency_info = stop_agencies.groupby("stop_id").agg({
+        "agency_id": lambda x: list(x.dropna().unique()),
+        "agency_name": lambda x: list(x.dropna().unique()) if x.notna().any() else [],
+        "route_short_name": lambda x: list(x.dropna().unique())
+    }).reset_index()
+    stop_agency_info.columns = ["stop_id", "agency_ids", "agency_names", "route_names"]
+
     # Group by stop to find which route types serve each stop
     stop_route_types_agg = (
         stop_route_types.groupby("stop_id")["route_type"].apply(list).reset_index()
@@ -597,6 +624,10 @@ def create_feed_from_gtfs_model(
     # Merge back to stops
     stops_df = pd.merge(
         stops_df, stop_route_types_agg[["stop_id", "has_street_transit"]], on="stop_id", how="left"
+    )
+    # Also merge agency information
+    stops_df = pd.merge(
+        stops_df, stop_agency_info, on="stop_id", how="left"
     )
 
     # Check for stops without route type info
@@ -877,9 +908,32 @@ def create_feed_from_gtfs_model(
                     ]
                     stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
                 else:
+                    # Get agency and route info for this stop
+                    agency_ids = stops_df.loc[stop_idx, 'agency_ids'] if isinstance(stops_df.loc[stop_idx, 'agency_ids'], list) else []
+                    agency_names = stops_df.loc[stop_idx, 'agency_names'] if isinstance(stops_df.loc[stop_idx, 'agency_names'], list) else []
+                    route_names = stops_df.loc[stop_idx, 'route_names'] if isinstance(stops_df.loc[stop_idx, 'route_names'], list) else []
+                    
+                    # Format agency and route info for logging
+                    if agency_names:
+                        # Use agency names with IDs in parentheses
+                        agency_list = []
+                        for i, agency_id in enumerate(agency_ids):
+                            if i < len(agency_names) and agency_names[i]:
+                                agency_list.append(f"{agency_names[i]} ({agency_id})")
+                            else:
+                                agency_list.append(str(agency_id))
+                        agency_info = f"Agencies: {', '.join(agency_list)}"
+                    elif agency_ids:
+                        agency_info = f"Agencies: {', '.join(map(str, agency_ids))}"
+                    else:
+                        agency_info = "No agency info"
+                    
+                    route_info = f"Routes: {', '.join(map(str, route_names[:5]))}" + ("..." if len(route_names) > 5 else "") if route_names else ""
+                    
                     WranglerLogger.warning(
                         f"Stop {stops_df.loc[stop_idx, 'stop_id']} ({stops_df.loc[stop_idx, 'stop_name']}) "
-                        f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match"
+                        f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match. "
+                        f"{agency_info}. {route_info}"
                     )
             
             if len(distances) > 0:
@@ -906,9 +960,32 @@ def create_feed_from_gtfs_model(
                     ]
                     stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
                 else:
+                    # Get agency and route info for this stop
+                    agency_ids = stops_df.loc[stop_idx, 'agency_ids'] if isinstance(stops_df.loc[stop_idx, 'agency_ids'], list) else []
+                    agency_names = stops_df.loc[stop_idx, 'agency_names'] if isinstance(stops_df.loc[stop_idx, 'agency_names'], list) else []
+                    route_names = stops_df.loc[stop_idx, 'route_names'] if isinstance(stops_df.loc[stop_idx, 'route_names'], list) else []
+                    
+                    # Format agency and route info for logging
+                    if agency_names:
+                        # Use agency names with IDs in parentheses
+                        agency_list = []
+                        for i, agency_id in enumerate(agency_ids):
+                            if i < len(agency_names) and agency_names[i]:
+                                agency_list.append(f"{agency_names[i]} ({agency_id})")
+                            else:
+                                agency_list.append(str(agency_id))
+                        agency_info = f"Agencies: {', '.join(agency_list)}"
+                    elif agency_ids:
+                        agency_info = f"Agencies: {', '.join(map(str, agency_ids))}"
+                    else:
+                        agency_info = "No agency info"
+                    
+                    route_info = f"Routes: {', '.join(map(str, route_names[:5]))}" + ("..." if len(route_names) > 5 else "") if route_names else ""
+                    
                     WranglerLogger.warning(
                         f"Stop {stops_df.loc[stop_idx, 'stop_id']} ({stops_df.loc[stop_idx, 'stop_name']}) "
-                        f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match"
+                        f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match. "
+                        f"{agency_info}. {route_info}"
                     )
             
             if len(distances) > 0:
