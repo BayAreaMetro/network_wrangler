@@ -30,7 +30,11 @@ STREET_LEVEL_ROUTE_TYPES = [0, 3, 5, 11]
 # Route type 4: Ferry
 CONNECTIVITY_MATCH_ROUTE_TYPES = [1, 2, 4]
 
+# Maximum distance in miles for a stop to match to a node
+MAX_STOP_DISTANCE_MILES = 0.25
 
+# Feet to miles conversion
+FEET_PER_MILE = 5280.0
 def create_frequencies_from_stop_times(
     feed_tables: Dict[str, pd.DataFrame],
     time_periods: List[Dict[str, str]],
@@ -438,7 +442,7 @@ def match_route_stops_with_connectivity(
             'stop_info': stop_info
         }
     
-    # If no connected path found, fall back to nearest node matching
+    # If no connected path found, fall back to nearest node matching with distance threshold
     # Also build complete route info showing what would have been matched
     complete_route_progress = []
     stop_distances = {}
@@ -448,7 +452,17 @@ def match_route_stops_with_connectivity(
         nearest_idx = distances.idxmin()
         nearest_node = candidate_nodes_gdf.loc[nearest_idx, 'model_node_id']
         nearest_distance = distances[nearest_idx]
-        stop_matches[stop_id] = nearest_node
+        
+        # Only match if within threshold
+        if nearest_distance <= max_distance_ft:
+            stop_matches[stop_id] = nearest_node
+        else:
+            # Log that this stop is too far
+            WranglerLogger.debug(
+                f"Stop {stop_id} is {nearest_distance / FEET_PER_MILE:.2f} mi from nearest node - not matching"
+            )
+            nearest_node = None  # Mark as unmatched in the route progress
+            
         stop_distances[stop_id] = nearest_distance
         
         # Mark whether this stop was part of the connected path attempt
@@ -736,7 +750,8 @@ def create_feed_from_gtfs_model(
                         transit_nodes_gdf_proj,
                         transit_graph,
                         stops_gdf_proj,
-                        stops_df
+                        stops_df,
+                        max_distance_ft=MAX_STOP_DISTANCE_MILES * FEET_PER_MILE
                     )
                     
                     # Track failed routes
@@ -805,14 +820,18 @@ def create_feed_from_gtfs_model(
                                     # This is where connectivity failed
                                     candidates = failure['candidates_at_failure']
                                     if candidates == 0:
-                                        reason = "No nodes within 5000 ft"
+                                        reason = f"No nodes within {MAX_STOP_DISTANCE_MILES} mi"
                                     else:
                                         reason = f"{candidates} candidates found but none connected from node {failure['last_matched_node']}"
                                     WranglerLogger.debug(f"    [FAIL] Stop {idx + 1}: {stop_name} ({stop_id}) - {reason}")
                                 else:
                                     # Subsequent stops that weren't attempted for connectivity
-                                    distance = failure.get('stop_distances', {}).get(stop_id, 0)
-                                    WranglerLogger.debug(f"    [-] Stop {idx + 1}: {stop_name} ({stop_id}) -> Node {node_id} (nearest match, {distance:.0f} ft)")
+                                    distance_ft = failure.get('stop_distances', {}).get(stop_id, 0)
+                                    distance_miles = distance_ft / FEET_PER_MILE
+                                    if node_id is not None:
+                                        WranglerLogger.debug(f"    [-] Stop {idx + 1}: {stop_name} ({stop_id}) -> Node {node_id} (nearest match, {distance_miles:.2f} mi)")
+                                    else:
+                                        WranglerLogger.debug(f"    [X] Stop {idx + 1}: {stop_name} ({stop_id}) - No match (nearest node is {distance_miles:.2f} mi away)")
                         
                         # Show directions affected
                         directions = [r['direction_id'] for r in route_dirs]
@@ -852,10 +871,16 @@ def create_feed_from_gtfs_model(
             distances, indices = transit_nodes_tree.query(street_station_coords, k=1)
             
             for i, stop_idx in enumerate(street_station_indices):
-                stops_df.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
-                    "model_node_id"
-                ]
-                stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+                if distances[i][0] <= MAX_STOP_DISTANCE_MILES * FEET_PER_MILE:
+                    stops_df.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
+                        "model_node_id"
+                    ]
+                    stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+                else:
+                    WranglerLogger.warning(
+                        f"Stop {stops_df.loc[stop_idx, 'stop_id']} ({stops_df.loc[stop_idx, 'stop_name']}) "
+                        f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match"
+                    )
             
             if len(distances) > 0:
                 station_avg_dist = np.mean(distances)
@@ -875,10 +900,16 @@ def create_feed_from_gtfs_model(
             distances, indices = drive_nodes_tree.query(street_non_station_coords, k=1)
             
             for i, stop_idx in enumerate(street_non_station_indices):
-                stops_df.loc[stop_idx, "model_node_id"] = drive_nodes_gdf.iloc[indices[i][0]][
-                    "model_node_id"
-                ]
-                stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+                if distances[i][0] <= MAX_STOP_DISTANCE_MILES * FEET_PER_MILE:
+                    stops_df.loc[stop_idx, "model_node_id"] = drive_nodes_gdf.iloc[indices[i][0]][
+                        "model_node_id"
+                    ]
+                    stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+                else:
+                    WranglerLogger.warning(
+                        f"Stop {stops_df.loc[stop_idx, 'stop_id']} ({stops_df.loc[stop_idx, 'stop_name']}) "
+                        f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match"
+                    )
             
             if len(distances) > 0:
                 non_station_avg_dist = np.mean(distances)
@@ -904,10 +935,16 @@ def create_feed_from_gtfs_model(
         distances, indices = transit_nodes_tree.query(non_street_stop_coords, k=1)
 
         for i, stop_idx in enumerate(non_street_stop_indices):
-            stops_df.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
-                "model_node_id"
-            ]
-            stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+            if distances[i][0] <= MAX_STOP_DISTANCE_MILES * FEET_PER_MILE:
+                stops_df.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
+                    "model_node_id"
+                ]
+                stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+            else:
+                WranglerLogger.warning(
+                    f"Stop {stops_df.loc[stop_idx, 'stop_id']} ({stops_df.loc[stop_idx, 'stop_name']}) "
+                    f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match"
+                )
 
         non_street_avg_dist = np.mean(distances)
         non_street_max_dist = np.max(distances)
