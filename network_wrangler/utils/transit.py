@@ -317,7 +317,6 @@ def match_route_stops_with_connectivity(
     candidate_nodes_gdf: gpd.GeoDataFrame,
     transit_graph: Dict[int, set],
     stops_gdf_proj: gpd.GeoDataFrame,
-    stops_df: pd.DataFrame,
     max_distance_ft: float = 5000
 ) -> Tuple[Dict[str, int], bool, Dict[str, Any]]:
     """Match stops for a route considering transit link connectivity.
@@ -326,8 +325,7 @@ def match_route_stops_with_connectivity(
         route_stops_df: DataFrame with stops for one route, ordered by stop_sequence
         candidate_nodes_gdf: GeoDataFrame of candidate nodes (projected coordinates)
         transit_graph: Adjacency graph of transit links
-        stops_gdf_proj: GeoDataFrame of all stops (projected coordinates)
-        stops_df: DataFrame with all stops info including stop names
+        stops_gdf_proj: GeoDataFrame of all stops with projected coordinates and all stop attributes
         max_distance_ft: Maximum allowed distance from stop to node
         
     Returns:
@@ -349,7 +347,7 @@ def match_route_stops_with_connectivity(
     # Get stop names for logging
     stop_info = {}
     for stop_id in ordered_stops:
-        stop_data = stops_df[stops_df['stop_id'] == stop_id]
+        stop_data = stops_gdf_proj[stops_gdf_proj['stop_id'] == stop_id]
         if len(stop_data) > 0:
             stop_info[stop_id] = stop_data.iloc[0]['stop_name']
         else:
@@ -710,8 +708,8 @@ def create_feed_from_gtfs_model(
     transit_nodes_tree = BallTree(transit_node_coords)
 
     # Initialize results
-    stops_df["model_node_id"] = None
-    stops_df["match_distance_ft"] = None
+    stops_gdf_proj["model_node_id"] = None
+    stops_gdf_proj["match_distance_ft"] = None
     
     # Build transit graph for connectivity-aware matching
     transit_graph = None
@@ -781,7 +779,6 @@ def create_feed_from_gtfs_model(
                         transit_nodes_gdf_proj,
                         transit_graph,
                         stops_gdf_proj,
-                        stops_df,
                         max_distance_ft=MAX_STOP_DISTANCE_MILES * FEET_PER_MILE
                     )
                     
@@ -803,9 +800,9 @@ def create_feed_from_gtfs_model(
                     
                     # Apply matches
                     for stop_id, node_id in stop_matches.items():
-                        if stop_id in stops_df['stop_id'].values:
-                            stop_idx = stops_df[stops_df['stop_id'] == stop_id].index[0]
-                            stops_df.loc[stop_idx, 'model_node_id'] = node_id
+                        if stop_id in stops_gdf_proj['stop_id'].values:
+                            stop_idx = stops_gdf_proj[stops_gdf_proj['stop_id'] == stop_id].index[0]
+                            stops_gdf_proj.loc[stop_idx, 'model_node_id'] = node_id
                             
                             # Calculate distance
                             stop_geom = stops_gdf_proj.loc[stop_idx, 'geometry']
@@ -813,7 +810,7 @@ def create_feed_from_gtfs_model(
                                 transit_nodes_gdf_proj['model_node_id'] == node_id
                             ].geometry.iloc[0]
                             distance = stop_geom.distance(node_geom)
-                            stops_df.loc[stop_idx, 'match_distance_ft'] = distance
+                            stops_gdf_proj.loc[stop_idx, 'match_distance_ft'] = distance
                     
                     WranglerLogger.info(f"Matched {len(stop_matches)} stops for route {route_name}")
             
@@ -872,19 +869,19 @@ def create_feed_from_gtfs_model(
                 WranglerLogger.debug("===============================================\n")
     
     # Identify station stops (stops with "station" in the name, case-insensitive)
-    stops_df["is_station"] = stops_df["stop_name"].str.lower().str.contains("station", na=False)
+    stops_gdf_proj["is_station"] = stops_gdf_proj["stop_name"].str.lower().str.contains("station", na=False)
 
     # Match remaining street-level transit stops (not already matched by connectivity)
-    unmatched_mask = stops_df["model_node_id"].isna()
-    street_transit_stops_unmatched = street_transit_stops[street_transit_stops.index.isin(stops_df[unmatched_mask].index)]
+    unmatched_mask = stops_gdf_proj["model_node_id"].isna()
+    street_transit_stops_unmatched = street_transit_stops[street_transit_stops.index.isin(stops_gdf_proj[unmatched_mask].index)]
     
     if len(street_transit_stops_unmatched) > 0:
         # Split street transit stops into station and non-station stops
-        street_station_mask = stops_df["has_street_transit"] & stops_df["is_station"] & unmatched_mask
-        street_non_station_mask = stops_df["has_street_transit"] & ~stops_df["is_station"] & unmatched_mask
+        street_station_mask = stops_gdf_proj["has_street_transit"] & stops_gdf_proj["is_station"] & unmatched_mask
+        street_non_station_mask = stops_gdf_proj["has_street_transit"] & ~stops_gdf_proj["is_station"] & unmatched_mask
         
-        street_station_indices = stops_df[street_station_mask].index
-        street_non_station_indices = stops_df[street_non_station_mask].index
+        street_station_indices = stops_gdf_proj[street_station_mask].index
+        street_non_station_indices = stops_gdf_proj[street_non_station_mask].index
         
         # Log counts
         WranglerLogger.info(
@@ -903,23 +900,23 @@ def create_feed_from_gtfs_model(
             
             for i, stop_idx in enumerate(street_station_indices):
                 if distances[i][0] <= MAX_STOP_DISTANCE_MILES * FEET_PER_MILE:
-                    stops_df.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
+                    stops_gdf_proj.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
                         "model_node_id"
                     ]
-                    stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+                    stops_gdf_proj.loc[stop_idx, "match_distance_ft"] = distances[i][0]
                 else:
                     # Get agency and route info for this stop
-                    agency_ids = stops_df.loc[stop_idx, 'agency_ids'] if isinstance(stops_df.loc[stop_idx, 'agency_ids'], list) else []
-                    agency_names = stops_df.loc[stop_idx, 'agency_names'] if isinstance(stops_df.loc[stop_idx, 'agency_names'], list) else []
-                    route_names = stops_df.loc[stop_idx, 'route_names'] if isinstance(stops_df.loc[stop_idx, 'route_names'], list) else []
+                    agency_ids = stops_gdf_proj.loc[stop_idx, 'agency_ids'] if isinstance(stops_gdf_proj.loc[stop_idx, 'agency_ids'], list) else []
+                    agency_names = stops_gdf_proj.loc[stop_idx, 'agency_names'] if isinstance(stops_gdf_proj.loc[stop_idx, 'agency_names'], list) else []
+                    route_names = stops_gdf_proj.loc[stop_idx, 'route_names'] if isinstance(stops_gdf_proj.loc[stop_idx, 'route_names'], list) else []
                     
                     # Format agency and route info for logging
                     if agency_names:
                         # Use agency names with IDs in parentheses
                         agency_list = []
-                        for i, agency_id in enumerate(agency_ids):
-                            if i < len(agency_names) and agency_names[i]:
-                                agency_list.append(f"{agency_names[i]} ({agency_id})")
+                        for j, agency_id in enumerate(agency_ids):
+                            if j < len(agency_names) and agency_names[j]:
+                                agency_list.append(f"{agency_names[j]} ({agency_id})")
                             else:
                                 agency_list.append(str(agency_id))
                         agency_info = f"Agencies: {', '.join(agency_list)}"
@@ -930,9 +927,11 @@ def create_feed_from_gtfs_model(
                     
                     route_info = f"Routes: {', '.join(map(str, route_names[:5]))}" + ("..." if len(route_names) > 5 else "") if route_names else ""
                     
+                    distance_ft = distances[i][0]
+                    distance_miles = distance_ft / FEET_PER_MILE
                     WranglerLogger.warning(
-                        f"Stop {stops_df.loc[stop_idx, 'stop_id']} ({stops_df.loc[stop_idx, 'stop_name']}) "
-                        f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match. "
+                        f"Stop {stops_gdf_proj.loc[stop_idx, 'stop_id']} ({stops_gdf_proj.loc[stop_idx, 'stop_name']}) "
+                        f"is {distance_miles:.2f} mi ({distance_ft:.1f} ft) from nearest transit node - exceeds {MAX_STOP_DISTANCE_MILES} mi threshold. "
                         f"{agency_info}. {route_info}"
                     )
             
@@ -955,23 +954,23 @@ def create_feed_from_gtfs_model(
             
             for i, stop_idx in enumerate(street_non_station_indices):
                 if distances[i][0] <= MAX_STOP_DISTANCE_MILES * FEET_PER_MILE:
-                    stops_df.loc[stop_idx, "model_node_id"] = drive_nodes_gdf.iloc[indices[i][0]][
+                    stops_gdf_proj.loc[stop_idx, "model_node_id"] = drive_nodes_gdf.iloc[indices[i][0]][
                         "model_node_id"
                     ]
-                    stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+                    stops_gdf_proj.loc[stop_idx, "match_distance_ft"] = distances[i][0]
                 else:
                     # Get agency and route info for this stop
-                    agency_ids = stops_df.loc[stop_idx, 'agency_ids'] if isinstance(stops_df.loc[stop_idx, 'agency_ids'], list) else []
-                    agency_names = stops_df.loc[stop_idx, 'agency_names'] if isinstance(stops_df.loc[stop_idx, 'agency_names'], list) else []
-                    route_names = stops_df.loc[stop_idx, 'route_names'] if isinstance(stops_df.loc[stop_idx, 'route_names'], list) else []
+                    agency_ids = stops_gdf_proj.loc[stop_idx, 'agency_ids'] if isinstance(stops_gdf_proj.loc[stop_idx, 'agency_ids'], list) else []
+                    agency_names = stops_gdf_proj.loc[stop_idx, 'agency_names'] if isinstance(stops_gdf_proj.loc[stop_idx, 'agency_names'], list) else []
+                    route_names = stops_gdf_proj.loc[stop_idx, 'route_names'] if isinstance(stops_gdf_proj.loc[stop_idx, 'route_names'], list) else []
                     
                     # Format agency and route info for logging
                     if agency_names:
                         # Use agency names with IDs in parentheses
                         agency_list = []
-                        for i, agency_id in enumerate(agency_ids):
-                            if i < len(agency_names) and agency_names[i]:
-                                agency_list.append(f"{agency_names[i]} ({agency_id})")
+                        for j, agency_id in enumerate(agency_ids):
+                            if j < len(agency_names) and agency_names[j]:
+                                agency_list.append(f"{agency_names[j]} ({agency_id})")
                             else:
                                 agency_list.append(str(agency_id))
                         agency_info = f"Agencies: {', '.join(agency_list)}"
@@ -982,9 +981,11 @@ def create_feed_from_gtfs_model(
                     
                     route_info = f"Routes: {', '.join(map(str, route_names[:5]))}" + ("..." if len(route_names) > 5 else "") if route_names else ""
                     
+                    distance_ft = distances[i][0]
+                    distance_miles = distance_ft / FEET_PER_MILE
                     WranglerLogger.warning(
-                        f"Stop {stops_df.loc[stop_idx, 'stop_id']} ({stops_df.loc[stop_idx, 'stop_name']}) "
-                        f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match. "
+                        f"Stop {stops_gdf_proj.loc[stop_idx, 'stop_id']} ({stops_gdf_proj.loc[stop_idx, 'stop_name']}) "
+                        f"is {distance_miles:.2f} mi ({distance_ft:.1f} ft) from nearest drive node - exceeds {MAX_STOP_DISTANCE_MILES} mi threshold. "
                         f"{agency_info}. {route_info}"
                     )
             
@@ -998,10 +999,10 @@ def create_feed_from_gtfs_model(
         WranglerLogger.info(f"Matched {len(street_transit_stops_unmatched):,} street-level transit stops (excluding connectivity-matched)")
 
     # Match remaining non-street transit stops to transit-accessible nodes (not already matched by connectivity)
-    non_street_transit_stops_unmatched = non_street_transit_stops[non_street_transit_stops.index.isin(stops_df[unmatched_mask].index)]
+    non_street_transit_stops_unmatched = non_street_transit_stops[non_street_transit_stops.index.isin(stops_gdf_proj[unmatched_mask].index)]
     
     if len(non_street_transit_stops_unmatched) > 0:
-        non_street_stop_indices = stops_df[~stops_df["has_street_transit"] & unmatched_mask].index
+        non_street_stop_indices = stops_gdf_proj[~stops_gdf_proj["has_street_transit"] & unmatched_mask].index
         non_street_stop_coords = np.array(
             [(geom.x, geom.y) for geom in stops_gdf_proj.loc[non_street_stop_indices].geometry]
         )
@@ -1013,14 +1014,16 @@ def create_feed_from_gtfs_model(
 
         for i, stop_idx in enumerate(non_street_stop_indices):
             if distances[i][0] <= MAX_STOP_DISTANCE_MILES * FEET_PER_MILE:
-                stops_df.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
+                stops_gdf_proj.loc[stop_idx, "model_node_id"] = transit_nodes_gdf.iloc[indices[i][0]][
                     "model_node_id"
                 ]
-                stops_df.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+                stops_gdf_proj.loc[stop_idx, "match_distance_ft"] = distances[i][0]
             else:
+                distance_ft = distances[i][0]
+                distance_miles = distance_ft / FEET_PER_MILE
                 WranglerLogger.warning(
-                    f"Stop {stops_df.loc[stop_idx, 'stop_id']} ({stops_df.loc[stop_idx, 'stop_name']}) "
-                    f"is {distances[i][0] / FEET_PER_MILE:.2f} mi from nearest node - skipping match"
+                    f"Stop {stops_gdf_proj.loc[stop_idx, 'stop_id']} ({stops_gdf_proj.loc[stop_idx, 'stop_name']}) "
+                    f"is {distance_miles:.2f} mi ({distance_ft:.1f} ft) from nearest transit node - exceeds {MAX_STOP_DISTANCE_MILES} mi threshold"
                 )
 
         non_street_avg_dist = np.mean(distances)
@@ -1031,8 +1034,8 @@ def create_feed_from_gtfs_model(
         )
 
     # Log statistics about the matching
-    avg_distance = stops_df["match_distance_ft"].mean()
-    max_distance = stops_df["match_distance_ft"].max()
+    avg_distance = stops_gdf_proj["match_distance_ft"].mean()
+    max_distance = stops_gdf_proj["match_distance_ft"].max()
     
     # Count stops by matching method
     connectivity_matched = 0
@@ -1041,9 +1044,9 @@ def create_feed_from_gtfs_model(
         connectivity_stop_ids = set()
         for route_stops in route_stop_patterns.values():
             connectivity_stop_ids.update(route_stops['stop_id'].tolist())
-        connectivity_matched = len(stops_df[stops_df['stop_id'].isin(connectivity_stop_ids) & stops_df['model_node_id'].notna()])
+        connectivity_matched = len(stops_gdf_proj[stops_gdf_proj['stop_id'].isin(connectivity_stop_ids) & stops_gdf_proj['model_node_id'].notna()])
     
-    total_matched = stops_df['model_node_id'].notna().sum()
+    total_matched = stops_gdf_proj['model_node_id'].notna().sum()
     regular_matched = total_matched - connectivity_matched
     
     WranglerLogger.info(
@@ -1060,7 +1063,7 @@ def create_feed_from_gtfs_model(
     )
 
     # Warn about stops that are far from nodes (more than 1000 feet)
-    far_stops = stops_df[stops_df["match_distance_ft"] > 1000]
+    far_stops = stops_gdf_proj[stops_gdf_proj["match_distance_ft"] > 1000]
     if len(far_stops) > 0:
         WranglerLogger.warning(f"{len(far_stops)} stops are more than 1000 ft from nearest node")
         far_street_non_station = far_stops[far_stops["has_street_transit"] & ~far_stops["is_station"]]
@@ -1081,8 +1084,8 @@ def create_feed_from_gtfs_model(
             )
 
     # convert gtfs_model to use those new stops
-    WranglerLogger.debug(f"Before convert_stops_to_wrangler_stops(), stops_df:\n{stops_df}")
-    feed_tables["stops"] = convert_stops_to_wrangler_stops(stops_df)
+    WranglerLogger.debug(f"Before convert_stops_to_wrangler_stops(), stops_gdf_proj:\n{stops_gdf_proj}")
+    feed_tables["stops"] = convert_stops_to_wrangler_stops(stops_gdf_proj)
     WranglerLogger.debug(
         f"After convert_stops_to_wrangler_stops(), feed_tables['stops']:\n{feed_tables['stops']}"
     )
@@ -1091,7 +1094,7 @@ def create_feed_from_gtfs_model(
     # Use the modified stops_df with model_node_id for conversion
     feed_tables["stop_times"] = convert_stop_times_to_wrangler_stop_times(
         gtfs_model.stop_times.copy(),
-        stops_df,  # Use our modified stops_df that has model_node_id
+        stops_gdf_proj,  # Use our modified stops_gdf_proj that has model_node_id
     )
     WranglerLogger.debug(
         f"After convert_stop_times_to_wrangler_stop_times(), feed_tables['stop_times']:\n{feed_tables['stop_times']}"
