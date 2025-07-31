@@ -1,6 +1,7 @@
 """Utilities for getting GTFS into wrangler"""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
@@ -334,6 +335,9 @@ def match_route_stops_with_connectivity(
         - bool indicating if connectivity matching succeeded
         - Dict with failure details (if failed)
     """
+    WranglerLogger.debug(f"==== match_route_stops_with_connectivity() ===")
+    WranglerLogger.debug(f"route_stops_df:\n{route_stops_df}")
+
     stop_matches = {}
     failure_info = {}
     
@@ -812,7 +816,7 @@ def create_feed_from_gtfs_model(
                             distance = stop_geom.distance(node_geom)
                             stops_gdf_proj.loc[stop_idx, 'match_distance_ft'] = distance
                     
-                    WranglerLogger.info(f"Matched {len(stop_matches)} stops for route {route_name}")
+                    WranglerLogger.info(f"Matched {len(stop_matches)} of {len(route_stops)} stops for route {route_name}")
             
             # Log failed connectivity routes
             if failed_connectivity_routes:
@@ -1211,3 +1215,402 @@ def create_feed_from_gtfs_model(
                 columns=["trip_id", "stop_id", "arrival_time", "departure_time", "stop_sequence"]
             ),
         )
+
+
+def filter_transit_by_boundary(
+    transit_data: Union[GtfsModel, Feed],
+    boundary_file: Union[str, Path, gpd.GeoDataFrame],
+    remove_partial_routes: bool = False,
+) -> Union[GtfsModel, Feed]:
+    """Filter transit routes based on whether they have stops within a boundary.
+    
+    Removes routes that are entirely outside the boundary shapefile. By default,
+    keeps routes that have at least one stop within the boundary. Optionally can
+    remove routes that are only partially within the boundary.
+    
+    Args:
+        transit_data: Either a GtfsModel or Feed object to filter
+        boundary_file: Path to boundary shapefile or a GeoDataFrame with boundary polygon(s)
+        remove_partial_routes: If True, removes routes that have ANY stops outside 
+            the boundary. If False (default), only removes routes with ALL stops 
+            outside the boundary.
+    
+    Returns:
+        Filtered GtfsModel or Feed object of the same type as input
+    
+    Example:
+        >>> # Remove routes entirely outside the Bay Area
+        >>> filtered_gtfs = filter_transit_by_boundary(
+        ...     gtfs_model,
+        ...     "bay_area_boundary.shp"
+        ... )
+        >>> 
+        >>> # Remove routes that extend outside the boundary at all
+        >>> filtered_gtfs = filter_transit_by_boundary(
+        ...     gtfs_model,
+        ...     "bay_area_boundary.shp",
+        ...     remove_partial_routes=True
+        ... )
+    """
+    WranglerLogger.info("Filtering transit routes by boundary")
+    
+    # Load boundary if it's a file path
+    if isinstance(boundary_file, (str, Path)):
+        boundary_gdf = gpd.read_file(boundary_file)
+    else:
+        boundary_gdf = boundary_file
+    
+    # Ensure boundary is in a geographic CRS for spatial operations
+    if boundary_gdf.crs is None:
+        WranglerLogger.warning("Boundary has no CRS, assuming EPSG:4326")
+        boundary_gdf = boundary_gdf.set_crs("EPSG:4326")
+    
+    # Get stops data
+    if isinstance(transit_data, GtfsModel):
+        stops_df = transit_data.stops.copy()
+        routes_df = transit_data.routes.copy()
+        trips_df = transit_data.trips.copy()
+        stop_times_df = transit_data.stop_times.copy()
+        is_gtfs = True
+    else:  # Feed
+        stops_df = transit_data.stops.copy()
+        routes_df = transit_data.routes.copy()
+        trips_df = transit_data.trips.copy()
+        stop_times_df = transit_data.stop_times.copy()
+        is_gtfs = False
+    
+    # Create GeoDataFrame from stops
+    stops_gdf = gpd.GeoDataFrame(
+        stops_df,
+        geometry=gpd.points_from_xy(stops_df.stop_lon, stops_df.stop_lat),
+        crs="EPSG:4326"
+    )
+    
+    # Reproject to match boundary CRS if needed
+    if stops_gdf.crs != boundary_gdf.crs:
+        stops_gdf = stops_gdf.to_crs(boundary_gdf.crs)
+    
+    # Spatial join to find stops within boundary
+    stops_in_boundary = gpd.sjoin(
+        stops_gdf,
+        boundary_gdf,
+        how="inner",
+        predicate="within"
+    )
+    stops_in_boundary_ids = set(stops_in_boundary.stop_id.unique())
+    
+    WranglerLogger.info(
+        f"Found {len(stops_in_boundary_ids):,} stops within boundary "
+        f"out of {len(stops_df):,} total stops"
+    )
+    
+    # Find which routes to keep
+    # Get unique stop-route pairs from stop_times and trips
+    stop_route_pairs = pd.merge(
+        stop_times_df[['trip_id', 'stop_id']],
+        trips_df[['trip_id', 'route_id']],
+        on='trip_id'
+    )[['stop_id', 'route_id']].drop_duplicates()
+    
+    # Group by route to find which stops each route serves
+    route_stops = stop_route_pairs.groupby('route_id')['stop_id'].apply(set).reset_index()
+    route_stops.columns = ['route_id', 'stop_ids']
+    
+    # Determine which routes to keep
+    if remove_partial_routes:
+        # Keep only routes with ALL stops within boundary
+        route_stops['keep'] = route_stops['stop_ids'].apply(
+            lambda x: x.issubset(stops_in_boundary_ids)
+        )
+        filter_desc = "routes with all stops within boundary"
+    else:
+        # Keep routes with AT LEAST ONE stop within boundary
+        route_stops['keep'] = route_stops['stop_ids'].apply(
+            lambda x: len(x.intersection(stops_in_boundary_ids)) > 0
+        )
+        filter_desc = "routes with at least one stop within boundary"
+    
+    routes_to_keep = set(route_stops[route_stops['keep']]['route_id'])
+    routes_to_remove = set(routes_df.route_id) - routes_to_keep
+    
+    WranglerLogger.info(
+        f"Keeping {len(routes_to_keep):,} {filter_desc} "
+        f"out of {len(routes_df):,} total routes"
+    )
+    
+    if routes_to_remove:
+        WranglerLogger.info(f"Removing {len(routes_to_remove):,} routes entirely outside boundary")
+        WranglerLogger.debug(f"Routes being removed: {sorted(routes_to_remove)[:10]}...")
+    
+    # Filter data
+    filtered_routes = routes_df[routes_df.route_id.isin(routes_to_keep)]
+    filtered_trips = trips_df[trips_df.route_id.isin(routes_to_keep)]
+    filtered_trip_ids = set(filtered_trips.trip_id)
+    filtered_stop_times = stop_times_df[stop_times_df.trip_id.isin(filtered_trip_ids)]
+    
+    # Find stops that are still referenced
+    stops_still_used = set(filtered_stop_times.stop_id.unique())
+    filtered_stops = stops_df[stops_df.stop_id.isin(stops_still_used)]
+    
+    WranglerLogger.info(
+        f"After filtering: {len(filtered_routes):,} routes, "
+        f"{len(filtered_trips):,} trips, {len(filtered_stops):,} stops"
+    )
+    
+    # Create filtered transit object
+    if is_gtfs:
+        # For GtfsModel, also filter shapes and other tables if they exist
+        filtered_data = {
+            'stops': filtered_stops,
+            'routes': filtered_routes,
+            'trips': filtered_trips,
+            'stop_times': filtered_stop_times,
+        }
+        
+        # Copy over other tables if they exist
+        if hasattr(transit_data, 'agency') and transit_data.agency is not None:
+            # Keep only agencies referenced by remaining routes
+            if 'agency_id' in filtered_routes.columns:
+                agency_ids = set(filtered_routes.agency_id.dropna().unique())
+                filtered_data['agency'] = transit_data.agency[
+                    transit_data.agency.agency_id.isin(agency_ids)
+                ]
+            else:
+                filtered_data['agency'] = transit_data.agency
+        
+        if hasattr(transit_data, 'shapes') and transit_data.shapes is not None:
+            # Keep only shapes referenced by remaining trips
+            if 'shape_id' in filtered_trips.columns:
+                shape_ids = set(filtered_trips.shape_id.dropna().unique())
+                filtered_data['shapes'] = transit_data.shapes[
+                    transit_data.shapes.shape_id.isin(shape_ids)
+                ]
+            else:
+                filtered_data['shapes'] = transit_data.shapes
+        
+        if hasattr(transit_data, 'calendar') and transit_data.calendar is not None:
+            # Keep only service_ids referenced by remaining trips
+            service_ids = set(filtered_trips.service_id.unique())
+            filtered_data['calendar'] = transit_data.calendar[
+                transit_data.calendar.service_id.isin(service_ids)
+            ]
+        
+        if hasattr(transit_data, 'calendar_dates') and transit_data.calendar_dates is not None:
+            # Keep only service_ids referenced by remaining trips
+            service_ids = set(filtered_trips.service_id.unique())
+            filtered_data['calendar_dates'] = transit_data.calendar_dates[
+                transit_data.calendar_dates.service_id.isin(service_ids)
+            ]
+        
+        if hasattr(transit_data, 'frequencies') and transit_data.frequencies is not None:
+            # Keep only frequencies for remaining trips
+            filtered_data['frequencies'] = transit_data.frequencies[
+                transit_data.frequencies.trip_id.isin(filtered_trip_ids)
+            ]
+        
+        return GtfsModel(**filtered_data)
+    
+    else:  # Feed
+        # For Feed, also handle frequencies and shapes
+        filtered_data = {
+            'stops': filtered_stops,
+            'routes': filtered_routes,
+            'trips': filtered_trips,
+            'stop_times': filtered_stop_times,
+        }
+        
+        if hasattr(transit_data, 'shapes') and transit_data.shapes is not None:
+            # Keep only shapes referenced by remaining trips
+            if 'shape_id' in filtered_trips.columns:
+                shape_ids = set(filtered_trips.shape_id.dropna().unique())
+                filtered_data['shapes'] = transit_data.shapes[
+                    transit_data.shapes.shape_id.isin(shape_ids)
+                ]
+            else:
+                filtered_data['shapes'] = transit_data.shapes
+        
+        if hasattr(transit_data, 'frequencies') and transit_data.frequencies is not None:
+            # Keep only frequencies for remaining trips
+            filtered_data['frequencies'] = transit_data.frequencies[
+                transit_data.frequencies.trip_id.isin(filtered_trip_ids)
+            ]
+        
+        return Feed(**filtered_data)
+
+
+def drop_transit_agency(
+    transit_data: Union[GtfsModel, Feed],
+    agency_id: Union[str, List[str]],
+) -> Union[GtfsModel, Feed]:
+    """Remove all routes, trips, stops, etc. for a specific agency or agencies.
+    
+    Filters out all data associated with the specified agency_id(s), ensuring
+    the resulting transit data remains valid by removing orphaned stops and
+    maintaining referential integrity.
+    
+    Args:
+        transit_data: Either a GtfsModel or Feed object to filter
+        agency_id: Single agency_id string or list of agency_ids to remove
+    
+    Returns:
+        Filtered GtfsModel or Feed object of the same type as input, with the
+        specified agency and all associated data removed
+    
+    Example:
+        >>> # Remove a single agency
+        >>> filtered_gtfs = drop_transit_agency(gtfs_model, "SFMTA")
+        >>> 
+        >>> # Remove multiple agencies
+        >>> filtered_gtfs = drop_transit_agency(
+        ...     gtfs_model,
+        ...     ["SFMTA", "AC"]
+        ... )
+    """
+    # Convert single agency_id to list for uniform handling
+    if isinstance(agency_id, str):
+        agency_ids_to_remove = [agency_id]
+    else:
+        agency_ids_to_remove = agency_id
+    
+    WranglerLogger.info(f"Removing transit data for agency/agencies: {agency_ids_to_remove}")
+    
+    # Get data tables
+    if isinstance(transit_data, GtfsModel):
+        routes_df = transit_data.routes.copy()
+        trips_df = transit_data.trips.copy()
+        stop_times_df = transit_data.stop_times.copy()
+        stops_df = transit_data.stops.copy()
+        is_gtfs = True
+    else:  # Feed
+        routes_df = transit_data.routes.copy()
+        trips_df = transit_data.trips.copy()
+        stop_times_df = transit_data.stop_times.copy()
+        stops_df = transit_data.stops.copy()
+        is_gtfs = False
+    
+    # Find routes to keep (those NOT belonging to agencies being removed)
+    if 'agency_id' in routes_df.columns:
+        routes_to_keep = routes_df[~routes_df.agency_id.isin(agency_ids_to_remove)]
+        routes_removed = len(routes_df) - len(routes_to_keep)
+    else:
+        # If no agency_id column in routes, log warning and keep all routes
+        WranglerLogger.warning("No agency_id column found in routes table - cannot filter by agency")
+        routes_to_keep = routes_df
+        routes_removed = 0
+    
+    route_ids_to_keep = set(routes_to_keep.route_id)
+    
+    # Filter trips based on remaining routes
+    trips_to_keep = trips_df[trips_df.route_id.isin(route_ids_to_keep)]
+    trips_removed = len(trips_df) - len(trips_to_keep)
+    trip_ids_to_keep = set(trips_to_keep.trip_id)
+    
+    # Filter stop_times based on remaining trips
+    stop_times_to_keep = stop_times_df[stop_times_df.trip_id.isin(trip_ids_to_keep)]
+    stop_times_removed = len(stop_times_df) - len(stop_times_to_keep)
+    
+    # Find stops that are still referenced
+    stops_still_used = set(stop_times_to_keep.stop_id.unique())
+    stops_to_keep = stops_df[stops_df.stop_id.isin(stops_still_used)]
+    stops_removed = len(stops_df) - len(stops_to_keep)
+    
+    WranglerLogger.info(
+        f"Removed: {routes_removed:,} routes, {trips_removed:,} trips, "
+        f"{stop_times_removed:,} stop_times, {stops_removed:,} stops"
+    )
+    
+    WranglerLogger.info(
+        f"Remaining: {len(routes_to_keep):,} routes, {len(trips_to_keep):,} trips, "
+        f"{len(stops_to_keep):,} stops"
+    )
+    
+    # Create filtered object
+    if is_gtfs:
+        # For GtfsModel, also filter other tables if they exist
+        filtered_data = {
+            'stops': stops_to_keep,
+            'routes': routes_to_keep,
+            'trips': trips_to_keep,
+            'stop_times': stop_times_to_keep,
+        }
+        
+        # Handle agency table
+        if hasattr(transit_data, 'agency') and transit_data.agency is not None:
+            # Keep agencies that are NOT being removed
+            filtered_data['agency'] = transit_data.agency[
+                ~transit_data.agency.agency_id.isin(agency_ids_to_remove)
+            ]
+            WranglerLogger.info(
+                f"Removed {len(transit_data.agency) - len(filtered_data['agency']):,} agencies"
+            )
+        
+        # Handle shapes table
+        if hasattr(transit_data, 'shapes') and transit_data.shapes is not None:
+            # Keep only shapes referenced by remaining trips
+            if 'shape_id' in trips_to_keep.columns:
+                shape_ids = set(trips_to_keep.shape_id.dropna().unique())
+                filtered_data['shapes'] = transit_data.shapes[
+                    transit_data.shapes.shape_id.isin(shape_ids)
+                ]
+                WranglerLogger.info(
+                    f"Removed {len(transit_data.shapes) - len(filtered_data['shapes']):,} shape points"
+                )
+            else:
+                filtered_data['shapes'] = transit_data.shapes
+        
+        # Handle calendar table
+        if hasattr(transit_data, 'calendar') and transit_data.calendar is not None:
+            # Keep only service_ids referenced by remaining trips
+            service_ids = set(trips_to_keep.service_id.unique())
+            filtered_data['calendar'] = transit_data.calendar[
+                transit_data.calendar.service_id.isin(service_ids)
+            ]
+        
+        # Handle calendar_dates table
+        if hasattr(transit_data, 'calendar_dates') and transit_data.calendar_dates is not None:
+            # Keep only service_ids referenced by remaining trips
+            service_ids = set(trips_to_keep.service_id.unique())
+            filtered_data['calendar_dates'] = transit_data.calendar_dates[
+                transit_data.calendar_dates.service_id.isin(service_ids)
+            ]
+        
+        # Handle frequencies table
+        if hasattr(transit_data, 'frequencies') and transit_data.frequencies is not None:
+            # Keep only frequencies for remaining trips
+            filtered_data['frequencies'] = transit_data.frequencies[
+                transit_data.frequencies.trip_id.isin(trip_ids_to_keep)
+            ]
+        
+        return GtfsModel(**filtered_data)
+    
+    else:  # Feed
+        # For Feed, also handle frequencies and shapes
+        filtered_data = {
+            'stops': stops_to_keep,
+            'routes': routes_to_keep,
+            'trips': trips_to_keep,
+            'stop_times': stop_times_to_keep,
+        }
+        
+        # Handle shapes table
+        if hasattr(transit_data, 'shapes') and transit_data.shapes is not None:
+            # Keep only shapes referenced by remaining trips
+            if 'shape_id' in trips_to_keep.columns:
+                shape_ids = set(trips_to_keep.shape_id.dropna().unique())
+                filtered_data['shapes'] = transit_data.shapes[
+                    transit_data.shapes.shape_id.isin(shape_ids)
+                ]
+                WranglerLogger.info(
+                    f"Removed {len(transit_data.shapes) - len(filtered_data['shapes']):,} shape points"
+                )
+            else:
+                filtered_data['shapes'] = transit_data.shapes
+        
+        # Handle frequencies table
+        if hasattr(transit_data, 'frequencies') and transit_data.frequencies is not None:
+            # Keep only frequencies for remaining trips
+            filtered_data['frequencies'] = transit_data.frequencies[
+                transit_data.frequencies.trip_id.isin(trip_ids_to_keep)
+            ]
+        
+        return Feed(**filtered_data)
