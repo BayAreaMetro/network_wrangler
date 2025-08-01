@@ -1224,20 +1224,21 @@ def create_feed_from_gtfs_model(
 def filter_transit_by_boundary(
     transit_data: Union[GtfsModel, Feed],
     boundary_file: Union[str, Path, gpd.GeoDataFrame],
-    remove_partial_routes: bool = False,
+    partially_include_route_type_action: Optional[Dict[int, str]] = None,
 ) -> Union[GtfsModel, Feed]:
     """Filter transit routes based on whether they have stops within a boundary.
     
-    Removes routes that are entirely outside the boundary shapefile. By default,
-    keeps routes that have at least one stop within the boundary. Optionally can
-    remove routes that are only partially within the boundary.
+    Removes routes that are entirely outside the boundary shapefile. Routes that are
+    partially within the boundary are kept by default, but can be configured per 
+    route type to be truncated at the boundary.
     
     Args:
         transit_data: Either a GtfsModel or Feed object to filter
         boundary_file: Path to boundary shapefile or a GeoDataFrame with boundary polygon(s)
-        remove_partial_routes: If True, removes routes that have ANY stops outside 
-            the boundary. If False (default), only removes routes with ALL stops 
-            outside the boundary.
+        partially_include_route_type_action: Optional dictionary mapping route_type to 
+            action for routes partially within boundary:
+            - "truncate": Truncate route to only include stops within boundary
+            Route types not specified in this dictionary will be kept entirely (default).
     
     Returns:
         Filtered GtfsModel or Feed object of the same type as input
@@ -1249,11 +1250,14 @@ def filter_transit_by_boundary(
         ...     "bay_area_boundary.shp"
         ... )
         >>> 
-        >>> # Remove routes that extend outside the boundary at all
+        >>> # Truncate bus routes at boundary, keep other route types unchanged
         >>> filtered_gtfs = filter_transit_by_boundary(
         ...     gtfs_model,
         ...     "bay_area_boundary.shp",
-        ...     remove_partial_routes=True
+        ...     partially_include_route_type_action={
+        ...         2: "truncate",  # Rail - will be truncated at boundary
+        ...         # Other route types not listed will be kept entirely
+        ...     }
         ... )
     """
     WranglerLogger.info("Filtering transit routes by boundary")
@@ -1320,25 +1324,50 @@ def filter_transit_by_boundary(
     route_stops = stop_route_pairs.groupby('route_id')['stop_id'].apply(set).reset_index()
     route_stops.columns = ['route_id', 'stop_ids']
     
-    # Determine which routes to keep
-    if remove_partial_routes:
-        # Keep only routes with ALL stops within boundary
-        route_stops['keep'] = route_stops['stop_ids'].apply(
-            lambda x: x.issubset(stops_in_boundary_ids)
-        )
-        filter_desc = "routes with all stops within boundary"
-    else:
-        # Keep routes with AT LEAST ONE stop within boundary
-        route_stops['keep'] = route_stops['stop_ids'].apply(
-            lambda x: len(x.intersection(stops_in_boundary_ids)) > 0
-        )
-        filter_desc = "routes with at least one stop within boundary"
+    # Add route_type information
+    route_stops = pd.merge(route_stops, routes_df[['route_id', 'route_type']], on='route_id', how='left')
     
-    routes_to_keep = set(route_stops[route_stops['keep']]['route_id'])
-    routes_to_remove = set(routes_df.route_id) - routes_to_keep
+    # Initialize with default filters
+    if partially_include_route_type_action is None:
+        partially_include_route_type_action = {}
+    
+    # Track routes to truncate
+    routes_to_truncate = {}
+    
+    # Determine which routes to keep and how to handle them
+    def determine_route_handling(row):
+        route_id = row['route_id']
+        route_type = row['route_type']
+        stop_ids = row['stop_ids']
+        
+        # Check if route has stops both inside and outside boundary
+        stops_inside = stop_ids.intersection(stops_in_boundary_ids)
+        stops_outside = stop_ids - stops_in_boundary_ids
+        
+        # If all stops are outside, always remove
+        if len(stops_inside) == 0:
+            return 'remove'
+        
+        # If all stops are inside, always keep
+        if len(stops_outside) == 0:
+            return 'keep'
+        
+        # Route has stops both inside and outside - check partially_include_route_type_action
+        if route_type in partially_include_route_type_action:
+            if partially_include_route_type_action[route_type] == 'truncate':
+                return 'truncate'
+        
+        # Default to keep if not specified
+        return 'keep'
+    
+    route_stops['handling'] = route_stops.apply(determine_route_handling, axis=1)
+    
+    routes_to_keep = set(route_stops[route_stops['handling'].isin(['keep', 'truncate'])]['route_id'])
+    routes_to_remove = set(route_stops[route_stops['handling'] == 'remove']['route_id'])
+    routes_needing_truncation = set(route_stops[route_stops['handling'] == 'truncate']['route_id'])
     
     WranglerLogger.info(
-        f"Keeping {len(routes_to_keep):,} {filter_desc} "
+        f"Keeping {len(routes_to_keep):,} routes "
         f"out of {len(routes_df):,} total routes"
     )
     
@@ -1346,11 +1375,56 @@ def filter_transit_by_boundary(
         WranglerLogger.info(f"Removing {len(routes_to_remove):,} routes entirely outside boundary")
         WranglerLogger.debug(f"Routes being removed: {sorted(routes_to_remove)[:10]}...")
     
+    if routes_needing_truncation:
+        WranglerLogger.info(f"Truncating {len(routes_needing_truncation):,} routes at boundary")
+        WranglerLogger.debug(f"Routes being truncated: {sorted(routes_needing_truncation)[:10]}...")
+    
     # Filter data
     filtered_routes = routes_df[routes_df.route_id.isin(routes_to_keep)]
     filtered_trips = trips_df[trips_df.route_id.isin(routes_to_keep)]
     filtered_trip_ids = set(filtered_trips.trip_id)
-    filtered_stop_times = stop_times_df[stop_times_df.trip_id.isin(filtered_trip_ids)]
+    
+    # Handle truncation for stop_times
+    if routes_needing_truncation:
+        # Process stop_times to truncate routes
+        filtered_stop_times = []
+        
+        for trip_id, trip_stop_times in stop_times_df.groupby('trip_id'):
+            # Skip if trip is not in filtered trips
+            if trip_id not in filtered_trip_ids:
+                continue
+                
+            trip_info = trips_df[trips_df.trip_id == trip_id].iloc[0]
+            route_id = trip_info['route_id']
+            
+            if route_id in routes_needing_truncation:
+                # Sort by stop_sequence to ensure proper order
+                trip_stop_times = trip_stop_times.sort_values('stop_sequence')
+                
+                # Find first and last stops inside boundary
+                stops_in_boundary_mask = trip_stop_times['stop_id'].isin(stops_in_boundary_ids)
+                
+                if stops_in_boundary_mask.any():
+                    # Find the range of stops to keep
+                    first_inside_idx = stops_in_boundary_mask.idxmax()
+                    last_inside_idx = stops_in_boundary_mask[::-1].idxmax()
+                    
+                    # Keep stops from first inside to last inside
+                    truncated_stops = trip_stop_times.loc[first_inside_idx:last_inside_idx].copy()
+                    
+                    # Renumber stop_sequence to be consecutive
+                    truncated_stops['stop_sequence'] = range(len(truncated_stops))
+                    
+                    filtered_stop_times.append(truncated_stops)
+            else:
+                # Not a truncated route, keep all stops
+                filtered_stop_times.append(trip_stop_times)
+        
+        # Combine all filtered stop times
+        filtered_stop_times = pd.concat(filtered_stop_times, ignore_index=True)
+    else:
+        # No truncation needed
+        filtered_stop_times = stop_times_df[stop_times_df.trip_id.isin(filtered_trip_ids)]
     
     # Find stops that are still referenced
     stops_still_used = set(filtered_stop_times.stop_id.unique())
