@@ -53,6 +53,7 @@ class RoadLinksTable(DataFrameModel):
         name (str): Name of the link.
         rail_only (bool): If the link is only for rail. Default is False.
         bus_only (bool): If the link is only for buses. Default is False.
+        ferry_only (bool): If the link is only for ferry. Default is False.
         drive_access (bool): If the link allows driving. Default is True.
         bike_access (bool): If the link allows biking. Default is True.
         walk_access (bool): If the link allows walking. Default is True.
@@ -235,6 +236,7 @@ class RoadLinksTable(DataFrameModel):
     name: Series[str] = Field(nullable=False, default="unknown")
     rail_only: Series[bool] = Field(coerce=True, nullable=False, default=False)
     bus_only: Series[bool] = Field(coerce=True, nullable=False, default=False)
+    ferry_only: Series[bool] = Field(coerce=True, nullable=False, default=False)
     drive_access: Series[bool] = Field(coerce=True, nullable=False, default=True)
     bike_access: Series[bool] = Field(coerce=True, nullable=False, default=True)
     walk_access: Series[bool] = Field(coerce=True, nullable=False, default=True)
