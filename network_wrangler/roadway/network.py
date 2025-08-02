@@ -44,7 +44,7 @@ from ..errors import (
 )
 from ..logger import WranglerLogger
 from ..models.projects.roadway_selection import SelectFacility, SelectLinksDict, SelectNodesDict
-from ..models.roadway.tables import RoadLinksTable, RoadNodesTable, RoadShapesTable
+from ..models.roadway.tables import RoadLinksTable, RoadNodesTable, RoadShapesTable, RoadNodesAttrs
 from ..params import DEFAULT_CATEGORY, DEFAULT_TIMESPAN, LAT_LON_CRS
 from ..utils.data import concat_with_attr
 from ..utils.models import empty_df_from_datamodel, validate_df_to_model
@@ -482,9 +482,10 @@ class RoadwayNetwork(BaseModel):
 
         if add_nodes_df.attrs.get("name") != "road_nodes":
             add_nodes_df = data_to_nodes_df(add_nodes_df, in_crs=in_crs, config=self.config)
-        self.nodes_df = validate_df_to_model(
-            concat_with_attr([self.nodes_df, add_nodes_df], axis=0), RoadNodesTable
-        )
+        concatenated_df = concat_with_attr([self.nodes_df, add_nodes_df], axis=0)
+        self.nodes_df = validate_df_to_model(concatenated_df, RoadNodesTable)
+        # Ensure attrs are preserved after validation
+        self.nodes_df.attrs.update(RoadNodesAttrs)
         if self.nodes_df.attrs.get("name") != "road_nodes":
             msg = f"Expected nodes_df to have name 'road_nodes', got {self.nodes_df.attrs.get('name')}"
             raise NotNodesError(msg)
@@ -610,6 +611,214 @@ class RoadwayNetwork(BaseModel):
         self.nodes_df = delete_nodes_by_ids(
             self.nodes_df, del_node_ids, ignore_missing=selection.ignore_missing
         )
+
+    def split_link(
+        self,
+        A: int,
+        B: int,
+        new_model_node_id: int,
+        fraction: float,
+        split_reverse_link: bool = True,
+    ) -> None:
+        """Splits a link into two links at a specified fraction of its length.
+
+        Args:
+            A: The model_node_id of the start node of the link to split.
+            B: The model_node_id of the end node of the link to split.
+            new_model_node_id: The model_node_id for the new node to be created at the split point.
+            fraction: The fraction along the link's length where the split occurs (0 < fraction < 1).
+            split_reverse_link: If True, also splits the reverse link if it exists. Defaults to True.
+
+        Raises:
+            ValueError: If the link doesn't exist, fraction is invalid, or new_model_node_id already exists.
+        """
+        WranglerLogger.debug(f"split_link() self.links_df.head():\n{self.links_df.head()}")
+        # Find the link with given A and B nodes
+        matching_links = self.links_df[(self.links_df['A'] == A) & (self.links_df['B'] == B)]
+        
+        if matching_links.empty:
+            msg = f"Link from node {A} to node {B} not found in network."
+            raise ValueError(msg)
+        
+        # If multiple links exist between A and B, use the first one and warn
+        if len(matching_links) > 1:
+            WranglerLogger.warning(f"Multiple links found from node {A} to {B}. Using first link with model_link_id {matching_links.index[0]}.")
+        
+        model_link_idx = matching_links.index[0]
+        
+        if not 0 < fraction < 1:
+            msg = f"Fraction must be between 0 and 1 (exclusive), got {fraction}."
+            raise ValueError(msg)
+        
+        if new_model_node_id in self.nodes_df.index:
+            msg = f"Node with model_node_id {new_model_node_id} already exists in network."
+            raise ValueError(msg)
+        
+        # Get the original link
+        orig_link = self.links_df.loc[model_link_idx].copy()
+        WranglerLogger.debug(f"Splitting link: {orig_link}")
+        
+        # Get the geometry to split (use shape geometry if available)
+        if pd.notna(orig_link.get('shape_id')) and orig_link['shape_id'] in self.shapes_df.index:
+            geometry = self.shapes_df.loc[orig_link['shape_id'], 'geometry']
+        else:
+            geometry = orig_link['geometry']
+        
+        # Calculate the split point
+        split_point = geometry.interpolate(fraction, normalized=True)
+        
+        # Create the new node
+        # The attribute osm_node_id is not required so don't set it
+        new_node_data = {
+            'model_node_id': new_model_node_id,
+            'X': split_point.x,
+            'Y': split_point.y,
+        }
+        
+        # Create DataFrame for new node and add it
+        new_node_df = pd.DataFrame([new_node_data])
+        self.add_nodes(new_node_df)
+        
+        # Split the geometry
+        from shapely.ops import split
+        from shapely.geometry import Point
+        
+        # Create a small circle around the split point to ensure clean split
+        split_geom = split_point.buffer(0.00001)  # Small buffer in degrees
+        split_result = split(geometry, split_geom)
+        
+        if len(split_result.geoms) >= 2:
+            geom1 = split_result.geoms[0]
+            geom2 = split_result.geoms[-1]
+        else:
+            # Fallback: manually create two linestrings
+            coords = list(geometry.coords)
+            split_idx = int(len(coords) * fraction)
+            if split_idx == 0:
+                split_idx = 1
+            elif split_idx >= len(coords):
+                split_idx = len(coords) - 1
+            
+            # Insert the split point at the right position
+            coords_1 = coords[:split_idx] + [(split_point.x, split_point.y)]
+            coords_2 = [(split_point.x, split_point.y)] + coords[split_idx:]
+            
+            from shapely.geometry import LineString
+            geom1 = LineString(coords_1)
+            geom2 = LineString(coords_2)
+        
+        # Create two new links
+        # Find the next available model_link_ids
+        max_link_id = self.links_df['model_link_id'].max()
+        new_link1_id = max_link_id + 1
+        new_link2_id = max_link_id + 2
+        
+        # First link: A to new node
+        link1_data = orig_link.to_dict()
+        link1_data['model_link_id'] = new_link1_id
+        link1_data['B'] = new_model_node_id
+        link1_data['geometry'] = geom1
+        link1_data['distance'] = orig_link.get('distance', 0) * fraction if 'distance' in orig_link else None
+        # Clear shape_id as we're creating new geometry
+        link1_data['shape_id'] = None
+        
+        # Second link: new node to B
+        link2_data = orig_link.to_dict()
+        link2_data['model_link_id'] = new_link2_id
+        link2_data['A'] = new_model_node_id
+        link2_data['geometry'] = geom2
+        link2_data['distance'] = orig_link.get('distance', 0) * (1 - fraction) if 'distance' in orig_link else None
+        # Clear shape_id as we're creating new geometry
+        link2_data['shape_id'] = None
+        
+        # Handle reverse link if requested
+        reverse_link_ids = []
+        if split_reverse_link:
+            # Look for reverse link (B->A)
+            reverse_link = self.links_df[
+                (self.links_df['A'] == orig_link['B']) & 
+                (self.links_df['B'] == orig_link['A'])
+            ]
+            
+            if not reverse_link.empty:
+                reverse_link_data = reverse_link.iloc[0].copy()
+                
+                # Get reverse geometry
+                if pd.notna(reverse_link_data.get('shape_id')) and reverse_link_data['shape_id'] in self.shapes_df.index:
+                    reverse_geometry = self.shapes_df.loc[reverse_link_data['shape_id'], 'geometry']
+                else:
+                    reverse_geometry = reverse_link_data['geometry']
+                
+                # Split at (1 - fraction) for reverse
+                reverse_split_point = reverse_geometry.interpolate(1 - fraction, normalized=True)
+                
+                # Split the reverse geometry
+                reverse_split_geom = reverse_split_point.buffer(0.00001)
+                reverse_split_result = split(reverse_geometry, reverse_split_geom)
+                
+                if len(reverse_split_result.geoms) >= 2:
+                    reverse_geom1 = reverse_split_result.geoms[0]
+                    reverse_geom2 = reverse_split_result.geoms[-1]
+                else:
+                    # Fallback for reverse
+                    coords = list(reverse_geometry.coords)
+                    split_idx = int(len(coords) * (1 - fraction))
+                    if split_idx == 0:
+                        split_idx = 1
+                    elif split_idx >= len(coords):
+                        split_idx = len(coords) - 1
+                    
+                    coords_1 = coords[:split_idx] + [(split_point.x, split_point.y)]
+                    coords_2 = [(split_point.x, split_point.y)] + coords[split_idx:]
+                    
+                    from shapely.geometry import LineString
+                    reverse_geom1 = LineString(coords_1)
+                    reverse_geom2 = LineString(coords_2)
+                
+                # Create reverse links
+                new_link3_id = max_link_id + 3
+                new_link4_id = max_link_id + 4
+                
+                # Reverse link 1: original B to new node
+                link3_data = reverse_link_data.to_dict()
+                link3_data['model_link_id'] = new_link3_id
+                link3_data['B'] = new_model_node_id
+                link3_data['geometry'] = reverse_geom1
+                link3_data['distance'] = reverse_link_data.get('distance', 0) * (1 - fraction) if 'distance' in reverse_link_data else None
+                link3_data['shape_id'] = None
+                
+                # Reverse link 2: new node to original A
+                link4_data = reverse_link_data.to_dict()
+                link4_data['model_link_id'] = new_link4_id
+                link4_data['A'] = new_model_node_id
+                link4_data['geometry'] = reverse_geom2
+                link4_data['distance'] = reverse_link_data.get('distance', 0) * fraction if 'distance' in reverse_link_data else None
+                link4_data['shape_id'] = None
+                
+                reverse_link_ids = [reverse_link_data['model_link_id']]
+        
+        # Delete original links - we need to delete by the model_link_id values
+        orig_model_link_id = orig_link['model_link_id']
+        links_to_delete = [orig_model_link_id] + reverse_link_ids
+        self.delete_links({"model_link_id": links_to_delete}, clean_nodes=False, clean_shapes=False)
+        
+        # Add new links
+        new_links_data = [link1_data, link2_data]
+        if reverse_link_ids:
+            new_links_data.extend([link3_data, link4_data])
+        
+        new_links_df = pd.DataFrame(new_links_data)
+        self.add_links(new_links_df)
+        
+        WranglerLogger.info(
+            f"Split link {orig_model_link_id} at fraction {fraction} with new node {new_model_node_id}. "
+            f"Created links {new_link1_id} and {new_link2_id}."
+        )
+        
+        if reverse_link_ids:
+            WranglerLogger.info(
+                f"Also split reverse link {reverse_link_ids[0]} creating links {new_link3_id} and {new_link4_id}."
+            )
 
     def clean_unused_shapes(self):
         """Removes any unused shapes from network that aren't referenced by links_df."""
