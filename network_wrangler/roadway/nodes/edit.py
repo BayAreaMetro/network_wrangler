@@ -63,7 +63,7 @@ def edit_node_geometry(
     # TODO write wrapper on validate call so don't have to do this
     nodes_df.attrs.update(RoadNodesAttrs)
     WranglerLogger.debug(f"Updating node geometry for {len(node_geometry_change_table)} nodes.")
-    WranglerLogger.debug(f"Original nodes_df: \n{nodes_df.head()}")
+    WranglerLogger.debug(f"Original nodes_df.head(): \n{nodes_df.head()}")
     # for now, require in_crs is the same for whole column
     if node_geometry_change_table.in_crs.nunique() != 1:
         msg = f"in_crs must be the same for all nodes. Got: {node_geometry_change_table.in_crs}"
@@ -79,9 +79,13 @@ def edit_node_geometry(
     WranglerLogger.debug(f"Updated geometry geo_df: \n{geo_df}")
 
     # Update the nodes table with the new geometry
+    WranglerLogger.debug(f"Before update_df_by_col_value(), nodes_df=\n{nodes_df}")
     nodes_df = update_df_by_col_value(
         nodes_df, geo_df, "model_node_id", properties=["X", "Y", "geometry"]
     )
+    WranglerLogger.debug(f"After update_df_by_col_value(), nodes_df=\n{nodes_df}")
+
+    WranglerLogger.debug("Completed update_df_by_col_value(), about to validate_df_to_model()")
     nodes_df = validate_df_to_model(nodes_df, RoadNodesTable)
 
     WranglerLogger.debug(f"Updated nodes_df: \n{nodes_df.head()}")

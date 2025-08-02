@@ -106,6 +106,7 @@ def data_to_nodes_df(
     nodes_df = validate_df_to_model(nodes_df, RoadNodesTable)
     nodes_df.attrs.update(RoadNodesAttrs)
     nodes_df.gdf_name = nodes_df.attrs["name"]
+    # lmz: why would we do this?
     nodes_df = set_df_index_to_pk(nodes_df)
 
     return nodes_df

@@ -479,9 +479,11 @@ class RoadwayNetwork(BaseModel):
             )
             msg = "Cannot add nodes with model_node_id already in network."
             raise NodeAddError(msg)
-
+        WranglerLogger.debug(f"add_nodes: self.nodes_df.tail()\n{self.nodes_df.tail()}")
+        WranglerLogger.debug(f"add_nodes() add_nodes_df:\n{add_nodes_df}")
         if add_nodes_df.attrs.get("name") != "road_nodes":
             add_nodes_df = data_to_nodes_df(add_nodes_df, in_crs=in_crs, config=self.config)
+        WranglerLogger.debug(f"add_nodes() add_nodes_df:\n{add_nodes_df}")
         concatenated_df = concat_with_attr([self.nodes_df, add_nodes_df], axis=0)
         self.nodes_df = validate_df_to_model(concatenated_df, RoadNodesTable)
         # Ensure attrs are preserved after validation
@@ -675,6 +677,14 @@ class RoadwayNetwork(BaseModel):
             'Y': split_point.y,
         }
         
+        # Copy additional attributes from node A if they exist
+        node_a_data = self.nodes_df.loc[self.nodes_df['model_node_id'] == orig_link['A']].iloc[0]
+        # Copy all columns except geometry, X, Y, and model_node_id
+        for col in self.nodes_df.columns:
+            if col not in ['model_node_id', 'X', 'Y', 'geometry','osm_node_id']:
+                if col in node_a_data.index and pd.notna(node_a_data[col]):
+                    new_node_data[col] = node_a_data[col]
+        
         # Create DataFrame for new node and add it
         new_node_df = pd.DataFrame([new_node_data])
         self.add_nodes(new_node_df)
@@ -848,12 +858,15 @@ class RoadwayNetwork(BaseModel):
         """
         node_geometry_change_table = NodeGeometryChangeTable(node_geometry_change_table)
         node_ids = node_geometry_change_table.model_node_id.to_list()
-        WranglerLogger.debug(f"Moving nodes: {node_ids}")
+        WranglerLogger.debug(f"Moving nodes:\n{node_geometry_change_table}")
         self.nodes_df = edit_node_geometry(self.nodes_df, node_geometry_change_table)
+        WranglerLogger.debug(f"Completed edit_node_geometry()")
         self.links_df = edit_link_geometry_from_nodes(self.links_df, self.nodes_df, node_ids)
+        WranglerLogger.debug(f"Completed edit_link_geometry_from_nodes()")
         self.shapes_df = edit_shape_geometry_from_nodes(
             self.shapes_df, self.links_df, self.nodes_df, node_ids
         )
+        WranglerLogger.debug(f"Completed edit_shape_geometry_from_nodes()")
 
     def has_node(self, model_node_id: int) -> bool:
         """Queries if network has node based on model_node_id.

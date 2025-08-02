@@ -208,6 +208,11 @@ def _update_props_for_common_idx(
     if isinstance(original_index, pd.RangeIndex):
         updated_df = destination_df.reset_index().set_index(original_index)
         updated_df = updated_df.drop(columns=["index"])
+    elif original_index.names == [None] or all(name is None for name in original_index.names):
+        # WranglerLogger.debug("original_index.names == [None], original_index is not pd.RangeIndex")
+        # Same logic as pd.RangeIndex
+        updated_df = destination_df.reset_index().set_index(original_index)
+        updated_df = updated_df.drop(columns=["index"])
     else:
         updated_df = destination_df.reset_index().set_index(original_index.names)
 
