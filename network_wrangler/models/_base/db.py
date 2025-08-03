@@ -307,23 +307,23 @@ class DBModelMixin:
 
             if pkref_table_name not in self.table_names:
                 WranglerLogger.debug(
-                    f"PK table {pkref_table_name} for specified FK \
-                    {table_name}.{field} not in table list - skipping validation."
+                    f"PK table {pkref_table_name} for specified FK " + \
+                    f"{table_name}.{field} not in table list - skipping validation."
                 )
                 continue
             try:
                 pkref_table = self.get_table(pkref_table_name)
             except RequiredTableError:
                 WranglerLogger.debug(
-                    f"PK table {pkref_table_name} for specified FK \
-                    {table_name}.{field} not in {type(self)}-  \
-                    skipping validation."
+                    f"PK table {pkref_table_name} for specified FK " + \
+                    f"{table_name}.{field} not in {type(self)} - " + \
+                    f"skipping validation."
                 )
                 continue
             if pkref_field not in pkref_table:
                 WranglerLogger.error(
-                    f"!!! {pkref_table_name} missing {pkref_field} field used as FK\
-                                    ref in {table_name}.{field}."
+                    f"!!! {pkref_table_name} missing {pkref_field} field used as FK " + \
+                    f"ref in {table_name}.{field}."
                 )
                 all_valid = False
                 continue
@@ -334,8 +334,8 @@ class DBModelMixin:
             valid, missing = fk_in_pk(pkref_table[pkref_field], table[field])
             if missing:
                 WranglerLogger.error(
-                    f"!!! {pkref_table_name}.{pkref_field} missing values used as FK\
-                      in {table_name}.{field}: \n_missing"
+                    f"!!! {pkref_table_name}.{pkref_field} missing values used as FK " + \
+                    f"in {table_name}.{field}: \n{missing}"
                 )
             all_valid = valid and all_valid
 
