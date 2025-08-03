@@ -658,7 +658,7 @@ class RoadwayNetwork(BaseModel):
         
         # Get the original link
         orig_link = self.links_df.loc[model_link_idx].copy()
-        WranglerLogger.debug(f"Splitting link: {orig_link}")
+        WranglerLogger.debug(f"Splitting link:\n{orig_link}")
         
         # Get the geometry to split (use shape geometry if available)
         if pd.notna(orig_link.get('shape_id')) and orig_link['shape_id'] in self.shapes_df.index:
