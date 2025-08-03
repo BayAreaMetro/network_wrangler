@@ -74,5 +74,5 @@ class GtfsModel(DBModelMixin):
 
         # Set extra provided attributes.
         extra_attr = {k: v for k, v in kwargs.items() if k not in self.table_names}
-        for k, v in extra_attr:
+        for k, v in extra_attr.items():
             self.__setattr__(k, v)
