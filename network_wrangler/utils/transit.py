@@ -1103,10 +1103,13 @@ def create_feed_from_gtfs_model(
 
 
     # convert gtfs_model to use those new stops
-    WranglerLogger.debug(f"Before convert_stops_to_wrangler_stops(), stops_gdf_proj:\n{stops_gdf_proj}")
+    WranglerLogger.debug(f"Before convert_stops_to_wrangler_stops(), crs={stops_gdf_proj.crs} " + \
+                         " stops_gdf_proj:\n{stops_gdf_proj}")
     feed_tables["stops"] = convert_stops_to_wrangler_stops(stops_gdf_proj)
-    WranglerLogger.debug(
-        f"After convert_stops_to_wrangler_stops(), feed_tables['stops']:\n{feed_tables['stops']}"
+    if isinstance(feed_tables["stops"], gpd.GeoDataFrame):
+        feed_tables["stops"].set_crs(stops_gdf_proj.crs, inplace=True)
+    WranglerLogger.debug(f"After convert_stops_to_wrangler_stops(), crs={feed_tables['stops'].crs} " + \
+                         " feed_tables['stops']:\n{feed_tables['stops']}"
     )
     WranglerLogger.debug(f"feed_tables['stops'].dtypes:\n{feed_tables['stops'].dtypes}")
 
