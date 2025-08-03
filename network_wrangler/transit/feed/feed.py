@@ -96,8 +96,74 @@ class Feed(DBModelMixin):
         extra_attr = {k: v for k, v in kwargs.items() if k not in self.table_names}
         if extra_attr:
             WranglerLogger.info(f"Adding additional attributes to Feed: {extra_attr.keys()}")
-        for k, v in extra_attr:
+        for k, v in extra_attr.items():
             self.__setattr__(k, v)
+    
+    def __repr__(self) -> str:
+        """Return a string representation of the Feed with table summaries."""
+        import geopandas as gpd
+        
+        lines = ["Feed (Wrangler GTFS):"]
+        
+        # Add agency info if available
+        if hasattr(self, 'agency') and self.agency is not None and len(self.agency) > 0:
+            agency_names = self.agency.agency_name.tolist()[:3]  # First 3 agencies
+            if len(self.agency) > 3:
+                agency_names.append(f"... and {len(self.agency) - 3} more")
+            lines.append(f"  Agencies ({len(self.agency)}): {', '.join(str(a) for a in agency_names)}")
+        
+        # Add summary for each table
+        table_summaries = []
+        if hasattr(self, 'routes') and self.routes is not None:
+            table_summaries.append(f"{len(self.routes)} routes")
+        if hasattr(self, 'trips') and self.trips is not None:
+            table_summaries.append(f"{len(self.trips)} trips")
+        if hasattr(self, 'stops') and self.stops is not None:
+            table_summaries.append(f"{len(self.stops)} stops")
+        if hasattr(self, 'stop_times') and self.stop_times is not None:
+            table_summaries.append(f"{len(self.stop_times)} stop_times")
+        if hasattr(self, 'shapes') and self.shapes is not None:
+            n_shapes = len(self.shapes.shape_id.unique()) if len(self.shapes) > 0 else 0
+            table_summaries.append(f"{n_shapes} shapes ({len(self.shapes)} points)")
+        if hasattr(self, 'frequencies') and self.frequencies is not None and len(self.frequencies) > 0:
+            table_summaries.append(f"{len(self.frequencies)} frequencies")
+            
+        if table_summaries:
+            lines.append(f"  Tables: {', '.join(table_summaries)}")
+        
+        # Add type information for each table
+        type_info = []
+        for table_name in ['agency', 'routes', 'trips', 'stops', 'stop_times', 'shapes', 'frequencies']:
+            if hasattr(self, table_name) and getattr(self, table_name) is not None:
+                table = getattr(self, table_name)
+                if isinstance(table, gpd.GeoDataFrame):
+                    type_info.append(f"{table_name}: GeoDataFrame")
+                else:
+                    type_info.append(f"{table_name}: DataFrame")
+        
+        if type_info:
+            lines.append(f"  Types: {', '.join(type_info)}")
+        
+        # Add route type breakdown if routes exist
+        if hasattr(self, 'routes') and self.routes is not None and len(self.routes) > 0:
+            route_type_counts = self.routes.route_type.value_counts().sort_index()
+            route_type_names = {
+                0: "Tram", 1: "Metro", 2: "Rail", 3: "Bus", 
+                4: "Ferry", 5: "Cable", 6: "Gondola", 7: "Funicular"
+            }
+            route_types = []
+            for rt, count in route_type_counts.items():
+                name = route_type_names.get(rt, f"Type{rt}")
+                route_types.append(f"{name}:{count}")
+            lines.append(f"  Route types: {', '.join(route_types)}")
+        
+        # Add note about model_node_ids if stops have them
+        if hasattr(self, 'stops') and self.stops is not None and 'stop_id' in self.stops.columns:
+            # In Feed, stop_id contains the model_node_id
+            unique_nodes = len(self.stops.stop_id.unique())
+            lines.append(f"  Model nodes: {unique_nodes} unique nodes referenced")
+        
+        return "\n".join(lines)
 
     def set_by_id(
         self,
