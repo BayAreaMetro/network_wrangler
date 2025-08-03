@@ -1,6 +1,6 @@
 """Utilities for getting GTFS into wrangler"""
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from pathlib import Path
 
 import geopandas as gpd
@@ -1262,16 +1262,25 @@ def filter_transit_by_boundary(
     """
     WranglerLogger.info("Filtering transit routes by boundary")
     
+    # Log input parameters
+    WranglerLogger.debug(f"partially_include_route_type_action: {partially_include_route_type_action}")
+    
     # Load boundary if it's a file path
     if isinstance(boundary_file, (str, Path)):
+        WranglerLogger.debug(f"Loading boundary from file: {boundary_file}")
         boundary_gdf = gpd.read_file(boundary_file)
     else:
+        WranglerLogger.debug("Using provided boundary GeoDataFrame")
         boundary_gdf = boundary_file
+    
+    WranglerLogger.debug(f"Boundary has {len(boundary_gdf)} polygon(s)")
     
     # Ensure boundary is in a geographic CRS for spatial operations
     if boundary_gdf.crs is None:
         WranglerLogger.warning("Boundary has no CRS, assuming EPSG:4326")
         boundary_gdf = boundary_gdf.set_crs(WGS84)
+    else:
+        WranglerLogger.debug(f"Boundary CRS: {boundary_gdf.crs}")
     
     # Get stops data
     if isinstance(transit_data, GtfsModel):
@@ -1280,12 +1289,16 @@ def filter_transit_by_boundary(
         trips_df = transit_data.trips.copy()
         stop_times_df = transit_data.stop_times.copy()
         is_gtfs = True
+        WranglerLogger.debug("Processing GtfsModel data")
     else:  # Feed
         stops_df = transit_data.stops.copy()
         routes_df = transit_data.routes.copy()
         trips_df = transit_data.trips.copy()
         stop_times_df = transit_data.stop_times.copy()
         is_gtfs = False
+        WranglerLogger.debug("Processing Feed data")
+    
+    WranglerLogger.debug(f"Input data has {len(stops_df)} stops, {len(routes_df)} routes, {len(trips_df)} trips, {len(stop_times_df)} stop_times")
     
     # Create GeoDataFrame from stops
     stops_gdf = gpd.GeoDataFrame(
@@ -1296,9 +1309,11 @@ def filter_transit_by_boundary(
     
     # Reproject to match boundary CRS if needed
     if stops_gdf.crs != boundary_gdf.crs:
+        WranglerLogger.debug(f"Reprojecting stops from {stops_gdf.crs} to {boundary_gdf.crs}")
         stops_gdf = stops_gdf.to_crs(boundary_gdf.crs)
     
     # Spatial join to find stops within boundary
+    WranglerLogger.debug("Performing spatial join to find stops within boundary")
     stops_in_boundary = gpd.sjoin(
         stops_gdf,
         boundary_gdf,
@@ -1306,6 +1321,12 @@ def filter_transit_by_boundary(
         predicate="within"
     )
     stops_in_boundary_ids = set(stops_in_boundary.stop_id.unique())
+    
+    # Log some stops that are outside boundary for debugging
+    stops_outside_boundary = set(stops_df.stop_id) - stops_in_boundary_ids
+    if stops_outside_boundary:
+        sample_outside = list(stops_outside_boundary)[:5]
+        WranglerLogger.debug(f"Sample of stops outside boundary: {sample_outside}")
     
     WranglerLogger.info(
         f"Found {len(stops_in_boundary_ids):,} stops within boundary "
@@ -1346,6 +1367,7 @@ def filter_transit_by_boundary(
         
         # If all stops are outside, always remove
         if len(stops_inside) == 0:
+            WranglerLogger.debug(f"Route {route_id} (type {route_type}): all {len(stop_ids)} stops outside boundary - REMOVE")
             return 'remove'
         
         # If all stops are inside, always keep
@@ -1353,14 +1375,23 @@ def filter_transit_by_boundary(
             return 'keep'
         
         # Route has stops both inside and outside - check partially_include_route_type_action
+        WranglerLogger.debug(
+            f"Route {route_id} (type {route_type}): {len(stops_inside)} stops inside, "
+            f"{len(stops_outside)} stops outside boundary"
+        )
+        
         if route_type in partially_include_route_type_action:
-            if partially_include_route_type_action[route_type] == 'truncate':
+            action = partially_include_route_type_action[route_type]
+            WranglerLogger.debug(f"  - Applying configured action for route_type {route_type}: {action}")
+            if action == 'truncate':
                 return 'truncate'
         
         # Default to keep if not specified
+        WranglerLogger.debug(f"  - No action configured for route_type {route_type}, defaulting to KEEP")
         return 'keep'
     
     route_stops['handling'] = route_stops.apply(determine_route_handling, axis=1)
+    WranglerLogger.debug(f"route_stops with handling set:\n{route_stops}")
     
     routes_to_keep = set(route_stops[route_stops['handling'].isin(['keep', 'truncate'])]['route_id'])
     routes_to_remove = set(route_stops[route_stops['handling'] == 'remove']['route_id'])
@@ -1384,56 +1415,165 @@ def filter_transit_by_boundary(
     filtered_trips = trips_df[trips_df.route_id.isin(routes_to_keep)]
     filtered_trip_ids = set(filtered_trips.trip_id)
     
-    # Handle truncation for stop_times
+    # Handle truncation by calling truncate_route_at_stop for each route needing truncation
     if routes_needing_truncation:
-        # Process stop_times to truncate routes
-        filtered_stop_times = []
+        WranglerLogger.debug(f"Processing truncation for {len(routes_needing_truncation)} routes")
         
-        for trip_id, trip_stop_times in stop_times_df.groupby('trip_id'):
-            # Skip if trip is not in filtered trips
-            if trip_id not in filtered_trip_ids:
-                continue
+        # Start with the current filtered data
+        # Need to ensure stop_times only includes trips that are in filtered_trips
+        filtered_stop_times_for_truncation = stop_times_df[stop_times_df.trip_id.isin(filtered_trip_ids)]
+        
+        current_data = transit_data
+        if is_gtfs:
+            # Build kwargs only for tables that exist
+            gtfs_kwargs = {
+                'stops': stops_df,
+                'routes': filtered_routes,
+                'trips': filtered_trips,
+                'stop_times': filtered_stop_times_for_truncation,
+            }
+            if hasattr(transit_data, 'agency') and transit_data.agency is not None:
+                gtfs_kwargs['agency'] = transit_data.agency
+            if hasattr(transit_data, 'calendar') and transit_data.calendar is not None:
+                gtfs_kwargs['calendar'] = transit_data.calendar
+            if hasattr(transit_data, 'calendar_dates') and transit_data.calendar_dates is not None:
+                gtfs_kwargs['calendar_dates'] = transit_data.calendar_dates
+            if hasattr(transit_data, 'shapes') and transit_data.shapes is not None:
+                gtfs_kwargs['shapes'] = transit_data.shapes
                 
-            trip_info = trips_df[trips_df.trip_id == trip_id].iloc[0]
-            route_id = trip_info['route_id']
+            current_data = GtfsModel(**gtfs_kwargs)
+        else:
+            # Build kwargs for Feed
+            feed_kwargs = {
+                'stops': stops_df,
+                'routes': filtered_routes,
+                'trips': filtered_trips,
+                'stop_times': filtered_stop_times_for_truncation,
+            }
+            if hasattr(transit_data, 'frequencies') and transit_data.frequencies is not None:
+                feed_kwargs['frequencies'] = transit_data.frequencies
+            if hasattr(transit_data, 'shapes') and transit_data.shapes is not None:
+                feed_kwargs['shapes'] = transit_data.shapes
+                
+            current_data = Feed(**feed_kwargs)
+        
+        # Process each route that needs truncation
+        for route_id in routes_needing_truncation:
+            WranglerLogger.debug(f"Processing truncation for route {route_id}")
             
-            if route_id in routes_needing_truncation:
-                # Sort by stop_sequence to ensure proper order
-                trip_stop_times = trip_stop_times.sort_values('stop_sequence')
+            # Get trips for this route
+            route_trips = trips_df[trips_df.route_id == route_id]
+            
+            # Group by direction_id
+            for direction_id in route_trips.direction_id.unique():
+                dir_trips = route_trips[route_trips.direction_id == direction_id]
+                if len(dir_trips) == 0:
+                    continue
                 
-                # Find first and last stops inside boundary
-                stops_in_boundary_mask = trip_stop_times['stop_id'].isin(stops_in_boundary_ids)
+                # Analyze stop patterns for this route/direction
+                # Get a representative trip (first one)
+                sample_trip_id = dir_trips.iloc[0].trip_id
+                sample_stop_times = current_data.stop_times[current_data.stop_times.trip_id == sample_trip_id].sort_values('stop_sequence')
                 
-                if stops_in_boundary_mask.any():
-                    # Find the range of stops to keep
-                    first_inside_idx = stops_in_boundary_mask.idxmax()
-                    last_inside_idx = stops_in_boundary_mask[::-1].idxmax()
+                # Find which stops are inside/outside boundary
+                stop_boundary_status = sample_stop_times['stop_id'].isin(stops_in_boundary_ids)
+                
+                # Check if route exits and re-enters boundary (complex case)
+                boundary_changes = stop_boundary_status.ne(stop_boundary_status.shift()).cumsum()
+                num_segments = boundary_changes.nunique()
+                
+                if num_segments > 2:
+                    # Complex case: route exits and re-enters boundary
+                    route_info = routes_df[routes_df.route_id == route_id].iloc[0]
+                    route_name = route_info.get('route_short_name', route_id)
+                    msg = (
+                        f"Route {route_name} ({route_id}) direction {direction_id} has a complex "
+                        f"boundary crossing pattern (crosses boundary {num_segments - 1} times). "
+                        f"Can only handle routes that exit boundary at beginning or end."
+                    )
+                    raise ValueError(msg)
+                
+                # Determine truncation type
+                first_stop_inside = stop_boundary_status.iloc[0]
+                last_stop_inside = stop_boundary_status.iloc[-1]
+                
+                if not first_stop_inside and not last_stop_inside:
+                    # All stops outside - shouldn't happen as route would be removed
+                    continue
+                elif first_stop_inside and last_stop_inside:
+                    # All stops inside - no truncation needed
+                    continue
+                elif not first_stop_inside and last_stop_inside:
+                    # Starts outside, ends inside - truncate before first inside stop
+                    # Find first True value (first stop inside boundary)
+                    first_inside_pos = stop_boundary_status.tolist().index(True)
+                    first_inside_stop = sample_stop_times.iloc[first_inside_pos]['stop_id']
                     
-                    # Keep stops from first inside to last inside
-                    truncated_stops = trip_stop_times.loc[first_inside_idx:last_inside_idx].copy()
+                    WranglerLogger.debug(
+                        f"Route {route_id} dir {direction_id}: truncating before stop {first_inside_stop}"
+                    )
+                    current_data = truncate_route_at_stop(
+                        current_data, route_id, direction_id, first_inside_stop, "before"
+                    )
+                elif first_stop_inside and not last_stop_inside:
+                    # Starts inside, ends outside - truncate after last inside stop
+                    # Find last True value (last stop inside boundary) 
+                    reversed_list = stop_boundary_status.tolist()[::-1]
+                    last_inside_pos = len(reversed_list) - 1 - reversed_list.index(True)
+                    last_inside_stop = sample_stop_times.iloc[last_inside_pos]['stop_id']
                     
-                    # Renumber stop_sequence to be consecutive
-                    truncated_stops['stop_sequence'] = range(len(truncated_stops))
-                    
-                    filtered_stop_times.append(truncated_stops)
-            else:
-                # Not a truncated route, keep all stops
-                filtered_stop_times.append(trip_stop_times)
+                    WranglerLogger.debug(
+                        f"Route {route_id} dir {direction_id}: truncating after stop {last_inside_stop}"
+                    )
+                    current_data = truncate_route_at_stop(
+                        current_data, route_id, direction_id, last_inside_stop, "after"
+                    )
         
-        # Combine all filtered stop times
-        filtered_stop_times = pd.concat(filtered_stop_times, ignore_index=True)
+        # Extract the final tables after all truncations
+        filtered_stops = current_data.stops
+        filtered_stop_times = current_data.stop_times
+        filtered_trips = current_data.trips  # Update trips in case any were affected
+        filtered_routes = current_data.routes  # Update routes as well
     else:
         # No truncation needed
         filtered_stop_times = stop_times_df[stop_times_df.trip_id.isin(filtered_trip_ids)]
+        filtered_stops = stops_df[stops_df.stop_id.isin(filtered_stop_times.stop_id.unique())]
     
-    # Find stops that are still referenced
-    stops_still_used = set(filtered_stop_times.stop_id.unique())
-    filtered_stops = stops_df[stops_df.stop_id.isin(stops_still_used)]
+    # Log details about removed stops
+    stops_still_used = set(filtered_stops.stop_id.unique())
+    removed_stops = set(stops_df.stop_id) - stops_still_used
+    if removed_stops:
+        WranglerLogger.debug(f"Removed {len(removed_stops)} stops that are no longer referenced")
+        
+        # Get details of removed stops
+        removed_stops_df = stops_df[stops_df['stop_id'].isin(removed_stops)][['stop_id', 'stop_name']]
+        
+        # Log up to 20 removed stops with their names
+        sample_size = min(20, len(removed_stops_df))
+        for _, stop in removed_stops_df.head(sample_size).iterrows():
+            WranglerLogger.debug(f"  - Removed stop: {stop['stop_id']} ({stop['stop_name']})")
+        
+        if len(removed_stops) > sample_size:
+            WranglerLogger.debug(f"  ... and {len(removed_stops) - sample_size} more stops")
     
     WranglerLogger.info(
         f"After filtering: {len(filtered_routes):,} routes, "
         f"{len(filtered_trips):,} trips, {len(filtered_stops):,} stops"
     )
+    
+    # Log summary of filtering by action type
+    route_handling_summary = route_stops.groupby('handling').size()
+    WranglerLogger.debug(f"Route handling summary:\n{route_handling_summary}")
+    
+    # Log route type distribution for routes with mixed stops
+    mixed_routes = route_stops[
+        (route_stops['handling'].isin(['keep', 'truncate'])) & 
+        (route_stops['route_id'].isin(routes_needing_truncation) | 
+         route_stops['handling'] == 'keep')
+    ]
+    if len(mixed_routes) > 0:
+        route_type_summary = mixed_routes.groupby('route_type')['handling'].value_counts()
+        WranglerLogger.debug(f"Route types with partial stops:\n{route_type_summary}")
     
     # Create filtered transit object
     if is_gtfs:
@@ -1691,4 +1831,215 @@ def drop_transit_agency(
                 transit_data.frequencies.trip_id.isin(trip_ids_to_keep)
             ]
         
+        return Feed(**filtered_data)
+
+
+def truncate_route_at_stop(
+    transit_data: Union[GtfsModel, Feed],
+    route_id: str,
+    direction_id: int,
+    stop_id: Union[str, int],
+    truncate: Literal["before", "after"]
+) -> Union[GtfsModel, Feed]:
+    """Truncate all trips of a route at a specific stop.
+    
+    Removes stops before or after the specified stop for all trips matching
+    the given route_id and direction_id. This is useful for shortening routes
+    at terminal stations or service boundaries.
+    
+    Args:
+        transit_data: Either a GtfsModel or Feed object to modify
+        route_id: The route_id to truncate
+        direction_id: The direction_id of trips to truncate (0 or 1)
+        stop_id: The stop where truncation occurs. For GtfsModel, this should be
+                a string stop_id. For Feed, this should be an integer model_node_id.
+        truncate: Either "before" to remove stops before stop_id, or
+                 "after" to remove stops after stop_id
+    
+    Returns:
+        New GtfsModel or Feed object with truncated trips
+        
+    Raises:
+        ValueError: If truncate is not "before" or "after"
+        ValueError: If stop_id is not found in any trips of the route/direction
+        
+    Example:
+        >>> # Truncate outbound BART trips to end at Embarcadero (GtfsModel)
+        >>> truncated_gtfs = truncate_route_at_stop(
+        ...     gtfs_model,
+        ...     route_id="BART-01",
+        ...     direction_id=0,
+        ...     stop_id="EMBR",  # string stop_id
+        ...     truncate="after"
+        ... )
+        >>> 
+        >>> # Truncate outbound BART trips to end at node 12345 (Feed)
+        >>> truncated_feed = truncate_route_at_stop(
+        ...     feed,
+        ...     route_id="BART-01",
+        ...     direction_id=0,
+        ...     stop_id=12345,  # integer model_node_id
+        ...     truncate="after"
+        ... )
+    """
+    if truncate not in ["before", "after"]:
+        msg = f"truncate must be 'before' or 'after', got '{truncate}'"
+        raise ValueError(msg)
+        
+    WranglerLogger.info(
+        f"Truncating route {route_id} direction {direction_id} {truncate} stop {stop_id}"
+    )
+    
+    # Get data tables
+    if isinstance(transit_data, GtfsModel):
+        routes_df = transit_data.routes.copy()
+        trips_df = transit_data.trips.copy()
+        stop_times_df = transit_data.stop_times.copy()
+        stops_df = transit_data.stops.copy()
+        is_gtfs = True
+    else:  # Feed
+        routes_df = transit_data.routes.copy()
+        trips_df = transit_data.trips.copy()
+        stop_times_df = transit_data.stop_times.copy()
+        stops_df = transit_data.stops.copy()
+        is_gtfs = False
+    
+    # Find trips to truncate
+    trips_to_truncate = trips_df[
+        (trips_df.route_id == route_id) & 
+        (trips_df.direction_id == direction_id)
+    ]
+    
+    if len(trips_to_truncate) == 0:
+        WranglerLogger.warning(
+            f"No trips found for route {route_id} direction {direction_id}"
+        )
+        return transit_data
+    
+    trip_ids_to_truncate = set(trips_to_truncate.trip_id)
+    WranglerLogger.debug(f"Found {len(trip_ids_to_truncate)} trips to truncate")
+    
+    # Check if stop_id exists in any of these trips
+    stop_times_for_route = stop_times_df[
+        (stop_times_df.trip_id.isin(trip_ids_to_truncate)) &
+        (stop_times_df.stop_id == stop_id)
+    ]
+    
+    if len(stop_times_for_route) == 0:
+        msg = f"Stop {stop_id} not found in any trips of route {route_id} direction {direction_id}"
+        raise ValueError(msg)
+    
+    # Process stop_times to truncate trips
+    truncated_stop_times = []
+    trips_truncated = 0
+    
+    for trip_id in trip_ids_to_truncate:
+        trip_stop_times = stop_times_df[stop_times_df.trip_id == trip_id].copy()
+        trip_stop_times = trip_stop_times.sort_values('stop_sequence')
+        
+        # Find the stop_sequence for the truncation stop
+        stop_mask = trip_stop_times.stop_id == stop_id
+        if not stop_mask.any():
+            # This trip doesn't have the stop, keep all stops
+            truncated_stop_times.append(trip_stop_times)
+            continue
+            
+        stop_sequence_at_stop = trip_stop_times.loc[stop_mask, 'stop_sequence'].iloc[0]
+        
+        # Truncate based on direction
+        if truncate == "before":
+            # Keep stops from stop_id onwards
+            truncated_stops = trip_stop_times[
+                trip_stop_times.stop_sequence >= stop_sequence_at_stop
+            ].copy()
+        else:  # truncate == "after"
+            # Keep stops up to and including stop_id
+            truncated_stops = trip_stop_times[
+                trip_stop_times.stop_sequence <= stop_sequence_at_stop
+            ].copy()
+        
+        # Renumber stop_sequence to be consecutive starting from 0
+        if len(truncated_stops) > 0:
+            truncated_stops['stop_sequence'] = range(len(truncated_stops))
+        
+        # Log truncation details
+        original_count = len(trip_stop_times)
+        truncated_count = len(truncated_stops)
+        if truncated_count < original_count:
+            trips_truncated += 1
+            
+            # Get removed stops details
+            removed_stop_ids = set(trip_stop_times.stop_id) - set(truncated_stops.stop_id)
+            if removed_stop_ids and len(removed_stop_ids) <= 10:
+                # Get stop names for removed stops
+                removed_stops_info = stops_df[stops_df.stop_id.isin(removed_stop_ids)][['stop_id', 'stop_name']]
+                removed_stops_list = [f"{row['stop_id']} ({row['stop_name']})" 
+                                     for _, row in removed_stops_info.iterrows()]
+                
+                WranglerLogger.debug(
+                    f"Trip {trip_id}: truncated from {original_count} to {truncated_count} stops. "
+                    f"Removed: {', '.join(removed_stops_list)}"
+                )
+            else:
+                WranglerLogger.debug(
+                    f"Trip {trip_id}: truncated from {original_count} to {truncated_count} stops"
+                )
+        
+        truncated_stop_times.append(truncated_stops)
+    
+    WranglerLogger.info(f"Truncated {trips_truncated} trips")
+    
+    # Combine all stop times (truncated and non-truncated)
+    other_stop_times = stop_times_df[~stop_times_df.trip_id.isin(trip_ids_to_truncate)]
+    all_stop_times = pd.concat([other_stop_times] + truncated_stop_times, ignore_index=True)
+    
+    # Find stops that are still referenced
+    stops_still_used = set(all_stop_times.stop_id.unique())
+    filtered_stops = stops_df[stops_df.stop_id.isin(stops_still_used)]
+    
+    # Log removed stops
+    removed_stops = set(stops_df.stop_id) - stops_still_used
+    if removed_stops:
+        WranglerLogger.debug(f"Removed {len(removed_stops)} stops that are no longer referenced")
+        
+        # Get details of removed stops
+        removed_stops_df = stops_df[stops_df.stop_id.isin(removed_stops)][['stop_id', 'stop_name']]
+        
+        # Log up to 20 removed stops with their names
+        sample_size = min(20, len(removed_stops_df))
+        for _, stop in removed_stops_df.head(sample_size).iterrows():
+            WranglerLogger.debug(f"  - Removed stop: {stop['stop_id']} ({stop['stop_name']})")
+        
+        if len(removed_stops) > sample_size:
+            WranglerLogger.debug(f"  ... and {len(removed_stops) - sample_size} more stops")
+    
+    # Create the result object
+    if is_gtfs:
+        filtered_data = {
+            'agency': transit_data.agency,
+            'routes': routes_df,  # Keep all routes
+            'shapes': transit_data.shapes, # TODO: truncate shapes to match truncated trips
+            'stops': filtered_stops,
+            'trips': trips_df,    # Keep all trips (just truncate stop_times)
+            'stop_times': all_stop_times,
+        }
+        if hasattr(transit_data, 'frequencies') and transit_data.frequencies is not None:
+            filtered_data['frequencies'] = transit_data.frequencies
+
+        return GtfsModel(**filtered_data)
+        
+    else:  # Feed
+        filtered_data = {
+            'frequencies': transit_data.frequencies,
+            'routes': routes_df,
+            'shapes': transit_data.shapes, # TODO: truncate shapes to match truncated trips
+            'stops': filtered_stops,
+            'trips': trips_df,
+            'stop_times': all_stop_times,
+        }
+        
+        if hasattr(transit_data, 'agencies') and transit_data.agencies is not None:
+            filtered_data['agencies'] = transit_data.agencies
+
+            
         return Feed(**filtered_data)
