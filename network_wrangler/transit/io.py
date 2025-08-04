@@ -145,12 +145,17 @@ def load_feed_from_path(
         )  # make stop_times.stop_id a string
         stop_ids = feed_dfs["stop_times"][["stop_id"]].drop_duplicates().reset_index(drop=True)
         WranglerLogger.debug(
-            f"After filtering stop_times to stop_ids (len={len(stop_ids):,}), stop_ids=\n{stop_ids}"
+            f"After filtering stop_times to stop_ids (len={len(stop_ids):,})"
         )
 
         feed_dfs["stops"]["stop_id"] = feed_dfs["stops"]["stop_id"].astype(
             str
         )  # make stops.stop_id a string
+        
+        # Save a copy of all stops before filtering
+        all_stops_df = feed_dfs["stops"].copy()
+        
+        # First filter to stops referenced in stop_times
         feed_dfs["stops"] = feed_dfs["stops"].merge(right=stop_ids, how="left", indicator=True)
         WranglerLogger.debug(
             f"feed_dfs['stops']._merge.value_counts():\n{feed_dfs['stops']._merge.value_counts()}"
@@ -161,7 +166,41 @@ def load_feed_from_path(
             .drop(columns=["_merge"])
             .reset_index(drop=True)
         )
-        WranglerLogger.debug(f"feed_dfs['stops']:\n{feed_dfs['stops']}")
+        
+        # Now check if any of these stops reference parent stations
+        if "parent_station" in feed_dfs["stops"].columns:
+            # Get parent stations that are referenced by kept stops
+            parent_stations = feed_dfs["stops"]["parent_station"].dropna().unique()
+            parent_stations = [ps for ps in parent_stations if ps != ""]  # Remove empty strings
+            
+            if len(parent_stations) > 0:
+                WranglerLogger.info(
+                    f"Found {len(parent_stations)} parent stations referenced by kept stops"
+                )
+                
+                # Find parent stations that aren't already in our filtered stops
+                existing_stop_ids = set(feed_dfs["stops"]["stop_id"])
+                missing_parent_stations = [ps for ps in parent_stations if ps not in existing_stop_ids]
+                
+                if len(missing_parent_stations) > 0:
+                    WranglerLogger.debug(
+                        f"Adding back {len(missing_parent_stations)} missing parent stations"
+                    )
+                    
+                    # Get the parent station records from our saved copy
+                    parent_station_records = all_stops_df[
+                        all_stops_df["stop_id"].isin(missing_parent_stations)
+                    ]
+                    
+                    # Append parent stations to filtered stops
+                    feed_dfs["stops"] = pd.concat(
+                        [feed_dfs["stops"], parent_station_records], 
+                        ignore_index=True
+                    )
+                    
+                    WranglerLogger.debug(
+                        f"After adding parent stations, stops count: {len(feed_dfs['stops']):,}"
+                    )
 
         # Now check for stop_times with invalid stop_ids after all filtering is complete
         valid_stop_ids = set(feed_dfs["stops"]["stop_id"])
