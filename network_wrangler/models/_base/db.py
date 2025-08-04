@@ -234,8 +234,8 @@ class DBModelMixin:
         for ref_table_name, ref_field in fields_as_fks[pk_table_name][pk_field]:
             if ref_table_name not in self.table_names:
                 WranglerLogger.debug(
-                    f"Referencing table {ref_table_name} not in self.table_names - \
-                    skipping fk validation."
+                    f"Referencing table {ref_table_name} not in self.table_names - " + \
+                    f"skipping fk validation."
                 )
                 continue
 
@@ -243,15 +243,15 @@ class DBModelMixin:
                 ref_table = self.get_table(ref_table_name)
             except RequiredTableError:
                 WranglerLogger.debug(
-                    f"Referencing table {ref_table_name} not yet set in \
-                     {type(self)} - skipping fk validation."
+                    f"Referencing table {ref_table_name} not yet set in " + \
+                    f"{type(self)} - skipping fk validation."
                 )
                 continue
 
             if ref_field not in ref_table:
                 WranglerLogger.debug(
-                    f"Referencing field {ref_field} not in {ref_table_name} - \
-                    skipping fk validation."
+                    f"Referencing field {ref_field} not in {ref_table_name} - " + \
+                    f"skipping fk validation."
                 )
                 continue
 
@@ -259,8 +259,8 @@ class DBModelMixin:
             all_valid = all_valid and valid
             if _missing:
                 WranglerLogger.error(
-                    f"Following values missing from {pk_table_name}.{pk_field} that \
-                      are referenced by {ref_table}: \n{_missing}"
+                    f"Following values missing from {pk_table_name}.{pk_field} that " + \
+                    f"are referenced by {ref_table}: \n{_missing}"
                 )
         return all_valid
 
@@ -300,8 +300,8 @@ class DBModelMixin:
             # WranglerLogger.debug(f"Looking for PK in {pkref_table_name}.{pkref_field}.")
             if field not in table:
                 WranglerLogger.warning(
-                    f"Foreign key value {field} not in {table_name} -\
-                    skipping validation"
+                    f"Foreign key value {field} not in {table_name} - " + \
+                    f"skipping validation"
                 )
                 continue
 
