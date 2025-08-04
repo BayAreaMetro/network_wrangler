@@ -506,17 +506,17 @@ def match_route_stops_with_connectivity(
     return stop_matches, False, failure_info  # Return failure info
 
 
-def match_stops_with_connectivity_for_non_mixed_traffic_sequences(
+def match_stops_with_connectivity_for_station_sequences(
     gtfs_model: GtfsModel,
     stops_gdf_proj: gpd.GeoDataFrame,
     transit_nodes_gdf_proj: gpd.GeoDataFrame,
     transit_graph: Dict[int, set],
     max_distance_ft: float = MAX_STOP_DISTANCE_MILES * FEET_PER_MILE
 ) -> int:
-    """Match stops using connectivity for sequences of non-mixed-traffic stops.
+    """Match stops using connectivity for sequences of stations (non-mixed-traffic stops).
     
-    This function processes all routes and identifies sequences of consecutive non-mixed-traffic
-    stops (like stations). These sequences are matched using connectivity constraints to ensure
+    This function processes all routes and identifies sequences of consecutive stations. 
+    These sequences are matched using connectivity constraints to ensure
     stops are matched to connected nodes in the transit network graph.
     
     Args:
@@ -533,7 +533,7 @@ def match_stops_with_connectivity_for_non_mixed_traffic_sequences(
         This function modifies stops_gdf_proj in place, setting model_node_id and 
         match_distance_ft for matched stops.
     """
-    WranglerLogger.info("Processing routes for connectivity-aware matching of non-mixed-traffic stop sequences")
+    WranglerLogger.info("Processing routes for connectivity-aware matching of station sequences")
     
     # Get all routes
     all_routes = gtfs_model.routes['route_id'].tolist()
@@ -541,9 +541,9 @@ def match_stops_with_connectivity_for_non_mixed_traffic_sequences(
     if not all_routes:
         return 0
         
-    WranglerLogger.info(f"Analyzing {len(all_routes)} routes for non-mixed-traffic stop sequences")
+    WranglerLogger.info(f"Analyzing {len(all_routes)} routes for station stop sequences")
     
-    # Process each route to find sequences of non-mixed-traffic stops
+    # Process each route to find sequences of station stops
     failed_connectivity_sequences = []
     total_sequences_processed = 0
     connectivity_matched_count = 0
@@ -567,14 +567,14 @@ def match_stops_with_connectivity_for_non_mixed_traffic_sequences(
         if len(route_stops) == 0:
             continue
         
-        # Find sequences of consecutive non-mixed-traffic stops
+        # Find sequences of consecutive stations (non-mixed-traffic stops)
         # First, we need to know which stops are in mixed traffic
         route_stop_ids = route_stops['stop_id'].tolist()
         stop_traffic_info = stops_gdf_proj[stops_gdf_proj['stop_id'].isin(route_stop_ids)][
             ['stop_id', 'stop_in_mixed_traffic']
         ].set_index('stop_id')['stop_in_mixed_traffic'].to_dict()
         
-        # Find sequences of non-mixed-traffic stops
+        # Find sequences of stations (non-mixed-traffic stops)
         sequences = []
         current_sequence = []
         
@@ -603,7 +603,7 @@ def match_stops_with_connectivity_for_non_mixed_traffic_sequences(
             route_name = route_info.get('route_short_name', route_id)
             
             WranglerLogger.debug(f"Processing sequence {seq_idx + 1} of {len(sequences)} for route {route_name} ({route_id})")
-            WranglerLogger.debug(f"  Sequence has {len(sequence_df)} non-mixed-traffic stops")
+            WranglerLogger.debug(f"  Sequence has {len(sequence_df)} stations")
             
             # Match stops with connectivity
             stop_matches, connectivity_success, failure_details = match_route_stops_with_connectivity(
@@ -646,7 +646,7 @@ def match_stops_with_connectivity_for_non_mixed_traffic_sequences(
             else:
                 WranglerLogger.debug(f"  Matched {len(stop_matches)} of {len(sequence_df)} stops (connectivity failed)")
     
-    WranglerLogger.info(f"Processed {total_sequences_processed} non-mixed-traffic stop sequences across all routes")
+    WranglerLogger.info(f"Processed {total_sequences_processed} station sequences across all routes")
     
     # Log failed connectivity sequences
     if failed_connectivity_sequences:
@@ -703,6 +703,140 @@ def match_stops_with_connectivity_for_non_mixed_traffic_sequences(
     return connectivity_matched_count
 
 
+def match_stops_for_mixed_traffic(
+    stops_gdf_proj: gpd.GeoDataFrame,
+    roadway_net: RoadwayNetwork,
+    crs: str,
+    max_distance_ft: float = MAX_STOP_DISTANCE_MILES * FEET_PER_MILE
+) -> int:
+    """Match mixed traffic stops to drive-accessible nodes in the roadway network.
+    
+    This function finds all unmatched stops that are in mixed traffic (e.g., bus stops)
+    and matches them to the nearest drive-accessible nodes in the roadway network.
+    
+    Args:
+        stops_gdf_proj: GeoDataFrame of stops with projected coordinates. Must contain
+            columns: stop_id, stop_name, stop_in_mixed_traffic, model_node_id, 
+            match_distance_ft, agency_ids, agency_names, route_names
+        roadway_net: RoadwayNetwork containing nodes with drive_access information
+        crs: Coordinate reference system to use for projection, in feet. (e.g., "EPSG:2227")
+        max_distance_ft: Maximum allowed distance from stop to node in feet
+        
+    Returns:
+        Number of mixed traffic stops matched
+        
+    Notes:
+        If roadway_net.nodes_df is not a GeoDataFrame, converts it to one.
+        Updates stops_gdf_proj in place, setting model_node_id and match_distance_ft
+        for matched stops.
+    """
+    import numpy as np
+    from sklearn.neighbors import BallTree
+    
+    # Get nodes from roadway network
+    if not isinstance(roadway_net.nodes_df, gpd.GeoDataFrame):
+        # Convert to GeoDataFrame if needed
+        roadway_net.nodes_df = gpd.GeoDataFrame(
+            roadway_net.nodes_df, 
+            geometry=gpd.points_from_xy(roadway_net.nodes_df.X, roadway_net.nodes_df.Y),
+            crs="EPSG:4326"
+        )
+    
+    # Extract drive-accessible nodes
+    drive_accessible_nodes_gdf = roadway_net.nodes_df[roadway_net.nodes_df["drive_access"] == True]
+    WranglerLogger.debug(
+        f"Found {len(drive_accessible_nodes_gdf):,} drive-accessible nodes (for street-level transit) "
+        f"out of {len(roadway_net.nodes_df):,} total"
+    )
+    
+    # Project drive nodes to specified CRS
+    drive_nodes_gdf_proj = drive_accessible_nodes_gdf.to_crs(crs)
+    
+    # Find unmatched mixed traffic stops
+    unmatched_mask = stops_gdf_proj["model_node_id"].isna()
+    mixed_traffic_stops = stops_gdf_proj[stops_gdf_proj["stop_in_mixed_traffic"]]
+    mixed_traffic_stops_unmatched = mixed_traffic_stops[mixed_traffic_stops.index.isin(stops_gdf_proj[unmatched_mask].index)]
+    
+    if len(mixed_traffic_stops_unmatched) == 0:
+        WranglerLogger.info("No unmatched mixed traffic stops to process")
+        return 0
+    
+    # Get indices of mixed traffic stops that need matching
+    mixed_traffic_indices = stops_gdf_proj[stops_gdf_proj["stop_in_mixed_traffic"] & unmatched_mask].index
+    
+    WranglerLogger.info(
+        f"Matching {len(mixed_traffic_indices):,} remaining mixed traffic stops to drive-accessible nodes"
+    )
+    
+    # Build spatial index for drive nodes
+    drive_node_coords = np.array([(geom.x, geom.y) for geom in drive_nodes_gdf_proj.geometry])
+    drive_nodes_tree = BallTree(drive_node_coords)
+    
+    # Get coordinates of stops to match
+    mixed_traffic_coords = np.array(
+        [(geom.x, geom.y) for geom in stops_gdf_proj.loc[mixed_traffic_indices].geometry]
+    )
+    
+    WranglerLogger.debug(
+        f"Matching {len(mixed_traffic_coords):,} mixed traffic stops to {len(drive_accessible_nodes_gdf):,} drive-accessible nodes"
+    )
+    
+    # Query nearest neighbors
+    distances, indices = drive_nodes_tree.query(mixed_traffic_coords, k=1)
+    
+    # Process matches
+    matched_count = 0
+    for i, stop_idx in enumerate(mixed_traffic_indices):
+        if distances[i][0] <= max_distance_ft:
+            # Match successful
+            stops_gdf_proj.loc[stop_idx, "model_node_id"] = drive_nodes_gdf_proj.iloc[indices[i][0]]["model_node_id"]
+            stops_gdf_proj.loc[stop_idx, "match_distance_ft"] = distances[i][0]
+            matched_count += 1
+        else:
+            # Distance exceeds threshold - log warning with details
+            # Get agency and route info for this stop
+            agency_ids = stops_gdf_proj.loc[stop_idx, 'agency_ids'] if isinstance(stops_gdf_proj.loc[stop_idx, 'agency_ids'], list) else []
+            agency_names = stops_gdf_proj.loc[stop_idx, 'agency_names'] if isinstance(stops_gdf_proj.loc[stop_idx, 'agency_names'], list) else []
+            route_names = stops_gdf_proj.loc[stop_idx, 'route_names'] if isinstance(stops_gdf_proj.loc[stop_idx, 'route_names'], list) else []
+            
+            # Format agency and route info for logging
+            if agency_names:
+                # Use agency names with IDs in parentheses
+                agency_list = []
+                for j, agency_id in enumerate(agency_ids):
+                    if j < len(agency_names) and agency_names[j]:
+                        agency_list.append(f"{agency_names[j]} ({agency_id})")
+                    else:
+                        agency_list.append(str(agency_id))
+                agency_info = f"Agencies: {', '.join(agency_list)}"
+            elif agency_ids:
+                agency_info = f"Agencies: {', '.join(map(str, agency_ids))}"
+            else:
+                agency_info = "No agency info"
+            
+            route_info = f"Routes: {', '.join(map(str, route_names[:5]))}" + ("..." if len(route_names) > 5 else "") if route_names else ""
+            
+            distance_ft = distances[i][0]
+            distance_miles = distance_ft / FEET_PER_MILE
+            WranglerLogger.warning(
+                f"Stop {stops_gdf_proj.loc[stop_idx, 'stop_id']} ({stops_gdf_proj.loc[stop_idx, 'stop_name']}) "
+                f"is {distance_miles:.2f} mi ({distance_ft:.1f} ft) from nearest drive node - exceeds {MAX_STOP_DISTANCE_MILES} mi threshold. "
+                f"{agency_info}. {route_info}"
+            )
+    
+    # Log statistics
+    if len(distances) > 0:
+        avg_dist = np.mean(distances)
+        max_dist = np.max(distances)
+        WranglerLogger.debug(
+            f"  Mixed traffic stops - Average distance: {avg_dist:.1f} ft, Max distance: {max_dist:.1f} ft"
+        )
+    
+    WranglerLogger.info(f"Matched {matched_count:,} mixed traffic stops (excluding connectivity-matched)")
+    
+    return matched_count
+
+
 def create_feed_from_gtfs_model(
     gtfs_model: GtfsModel,
     roadway_net: RoadwayNetwork,
@@ -729,6 +863,8 @@ def create_feed_from_gtfs_model(
             This occurs when stops are too far from available nodes (beyond MAX_STOP_DISTANCE_MILES).
             The exception will have an 'unmatched_stops_gdf' attribute containing a GeoDataFrame
             of the unmatched stops with their details for debugging purposes.
+    Note:
+        If roadway_net.nodes_df is not a GeoDataFrame, converts it to one.
     """
     WranglerLogger.debug(f"create_feed_from_gtfsmodel()")
 
@@ -747,47 +883,34 @@ def create_feed_from_gtfs_model(
     if not isinstance(all_nodes_df, gpd.GeoDataFrame):
         if "geometry" not in all_nodes_df.columns:
             node_geometry = [Point(x, y) for x, y in zip(all_nodes_df["X"], all_nodes_df["Y"])]
-            all_nodes_gdf = gpd.GeoDataFrame(all_nodes_df, geometry=node_geometry, crs=WGS84)
+            roadway_net.nodes_df = gpd.GeoDataFrame(all_nodes_df, geometry=node_geometry, crs=WGS84)
         else:
-            all_nodes_gdf = gpd.GeoDataFrame(all_nodes_df, crs=WGS84)
+            roadway_net.nodes_df = gpd.GeoDataFrame(all_nodes_df, crs=WGS84)
     else:
-        all_nodes_gdf = all_nodes_df
-        if all_nodes_gdf.crs is None:
-            all_nodes_gdf = all_nodes_gdf.set_crs(WGS84)
+        roadway_net.nodes_df = all_nodes_df
+        if roadway_net.nodes_df.crs is None:
+            roadway_net.nodes_df = roadway_net.nodes_df.set_crs(WGS84)
     
-    links_df = roadway_net.links_df
-
     # Prepare different node sets for different route types
-    drive_accessible_nodes_gdf = None
     transit_accessible_nodes_gdf = None
-    
-    # Get nodes that are connected by drive-accessible links (for transit stops in mixed-traffic)
-    # Note: drive_access is a required field for RoadLinksTable
-    drive_links = links_df[links_df["drive_access"] == True]
-    drive_accessible_node_ids = set(drive_links["A"].unique()) | set(drive_links["B"].unique())
-    drive_accessible_nodes_gdf = all_nodes_gdf[
-        all_nodes_gdf["model_node_id"].isin(drive_accessible_node_ids)
-    ].copy()
-    WranglerLogger.info(
-        f"Found {len(drive_accessible_nodes_gdf):,} drive-accessible nodes (for street-level transit) out of {len(all_nodes_gdf):,} total"
-    )
     
     #TODO: convert this to use standard attributes: rail_only, bus_only and ferry_only
     # Get nodes connected by transit links (for rail/subway)
-    if "transit" in links_df.columns:
-        transit_links = links_df[links_df["transit"] == True]
-        transit_accessible_node_ids = set(transit_links["A"].unique()) | set(transit_links["B"].unique())
-        transit_accessible_nodes_gdf = all_nodes_gdf[
-            all_nodes_gdf["model_node_id"].isin(transit_accessible_node_ids)
+    if "transit" in roadway_net.links_df.columns:
+        transit_only_links = roadway_net.links_df[roadway_net.links_df["transit"] == True]
+        transit_accessible_node_ids = set(transit_only_links["A"].unique()) | set(transit_only_links["B"].unique())
+        transit_accessible_nodes_gdf = roadway_net.nodes_df[
+            roadway_net.nodes_df["model_node_id"].isin(transit_accessible_node_ids)
         ].copy()
         WranglerLogger.info(
-            f"Found {len(transit_accessible_nodes_gdf):,} transit-accessible nodes (for rail/subway) out of {len(all_nodes_gdf):,} total"
+            f"Found {len(transit_accessible_nodes_gdf):,} transit-accessible nodes (for rail/ferry) " + \
+            f"out of {len(roadway_net.nodes_df):,} total"
         )
     else:
         WranglerLogger.info(
             "No transit column found in links, all nodes will be used for non-street transit"
         )
-        transit_accessible_nodes_gdf = all_nodes_gdf.copy()
+        transit_accessible_nodes_gdf = roadway_net.nodes_df.copy()
 
     # create mapping from gtfs_model stop to RoadwayNetwork nodes
     # GtfsModel guarantees stops exists
@@ -807,7 +930,10 @@ def create_feed_from_gtfs_model(
 
     # GtfsModel guarantees stops, stop_times, trips and routes exist
     WranglerLogger.debug(
-        f"Processing {len(gtfs_model.stops):,} stops, {len(gtfs_model.stop_times):,} stop_times, {len(gtfs_model.trips):,} trips, {len(gtfs_model.routes):,} routes"
+        f"Processing {len(gtfs_model.stops):,} stops, " + \
+        f"{len(gtfs_model.stop_times):,} stop_times, " + \
+        f"{len(gtfs_model.trips):,} trips, " + \
+        f"{len(gtfs_model.routes):,} routes"
     )
 
     # Join stop_times with trips and routes
@@ -858,10 +984,11 @@ def create_feed_from_gtfs_model(
     )
     WranglerLogger.debug(f"MIXED_TRAFFIC_ONLY_ROUTE_TYPES={MIXED_TRAFFIC_ONLY_ROUTE_TYPES}")
     WranglerLogger.debug(f"MIXED_TRAFFIC_AND_STATION_ROUTE_TYPES={MIXED_TRAFFIC_AND_STATION_ROUTE_TYPES}")
+
     # For stops with route_types that are both MIXED_TRAFFIC_ROUTE_TYPES and STATION_ROUTE_TYPES (like light rail)
-    # the stops can be a mix; for those stops only, 
-    # set stop_in_mixed_traffic to True iff 'station' is NOT in the stop_name (case-insensitive)
-    stops_gdf_proj["is_station"] = stops_gdf_proj["stop_name"].str.lower().str.contains("station", na=False)
+    # the stops can be a mix of stations and on-road bus stops.
+    # For those stops only, set stop_in_mixed_traffic to True iff 'station' is NOT in the stop_name (case-insensitive)
+    stops_gdf_proj["name_includes_station"] = stops_gdf_proj["stop_name"].str.lower().str.contains("station", na=False)
     
     # Check if stop serves any route types that are in MIXED_TRAFFIC_AND_STATION_ROUTE_TYPES
     stops_gdf_proj["serves_mixed_and_station_types"] = stops_gdf_proj["route_types"].apply(
@@ -871,7 +998,7 @@ def create_feed_from_gtfs_model(
     # For stops serving mixed traffic and station route types (like light rail),
     # override stop_in_mixed_traffic based on whether "station" is NOT in the stop name
     mask = stops_gdf_proj["serves_mixed_and_station_types"]
-    stops_gdf_proj.loc[mask, "stop_in_mixed_traffic"] = ~stops_gdf_proj.loc[mask, "is_station"]
+    stops_gdf_proj.loc[mask, "stop_in_mixed_traffic"] = ~stops_gdf_proj.loc[mask, "name_includes_station"]
 
     # Check for stops without route type info
     # This shouldn't happen because gtfs_model would have caught this
@@ -879,22 +1006,26 @@ def create_feed_from_gtfs_model(
     assert(len(unmatched_stops) == 0)
     stops_gdf_proj["stop_in_mixed_traffic"] = stops_gdf_proj["stop_in_mixed_traffic"].fillna(False)
 
-    mixed_traffic_stops = stops_gdf_proj[stops_gdf_proj["stop_in_mixed_traffic"]]
-    non_mixed_traffic_stops = stops_gdf_proj[~stops_gdf_proj["stop_in_mixed_traffic"]]
+    stop_in_mixed_traffic_value_counts = stops_gdf_proj["stop_in_mixed_traffic"].value_counts()
     WranglerLogger.info(
-        f"Found {len(mixed_traffic_stops):,} stops in mixed traffic, {len(non_mixed_traffic_stops):,} stops that are stations"
+        f"Found {stop_in_mixed_traffic_value_counts[True]:,} stops in mixed traffic, " + \
+        f"{stop_in_mixed_traffic_value_counts[False]:,} stations"
     )
 
+    # columns: stops.txt columns: stop_id, stop_name, stop_code, stop_lat, stop_lon, zone_id, stop_url, 
+    #                             tts_stop_name, platform_code, location_type, parent_station, stop_timezone, 
+    #                             wheelchair_boarding, level_id, geometry
+    # added by this method: agency_ids, agency_names, route_ids, route_names, route_types, 
+    #                       stop_in_mixed_traffic, name_includes_station, serves_mixed_and_station_types
     # Log some examples
-    if len(mixed_traffic_stops) > 0:
-        WranglerLogger.debug(f"Mixed traffic transit stops:\n{stops_gdf_proj.loc[stops_gdf_proj.stop_in_mixed_traffic == True]}")
-    if len(non_mixed_traffic_stops) > 0:
-        WranglerLogger.debug(f"Non-mixed-traffic stops:\n{stops_gdf_proj.loc[stops_gdf_proj.stop_in_mixed_traffic == False]}")
+    if stop_in_mixed_traffic_value_counts[True] > 0:
+        WranglerLogger.debug(f"Mixed-traffic transit stops:\n{stops_gdf_proj.loc[stops_gdf_proj.stop_in_mixed_traffic == True]}")
+    if stop_in_mixed_traffic_value_counts[False] > 0:
+        WranglerLogger.debug(f"Stations:\n{stops_gdf_proj.loc[stops_gdf_proj.stop_in_mixed_traffic == False]}")
 
 
     # Project node GeoDataFrames to local coordinate system
-    all_nodes_gdf_proj = all_nodes_gdf.to_crs("EPSG:2227")
-    drive_nodes_gdf_proj = drive_accessible_nodes_gdf.to_crs("EPSG:2227")
+    nodes_df_proj = roadway_net.nodes_df.to_crs("EPSG:2227")
     transit_nodes_gdf_proj = transit_accessible_nodes_gdf.to_crs("EPSG:2227")
 
     # Use spatial index for efficient nearest neighbor search
@@ -903,13 +1034,11 @@ def create_feed_from_gtfs_model(
 
     WranglerLogger.info("Building spatial indices for stop-to-node matching")
 
-    # Build spatial indices
-    all_node_coords = np.array([(geom.x, geom.y) for geom in all_nodes_gdf_proj.geometry])
-    drive_node_coords = np.array([(geom.x, geom.y) for geom in drive_nodes_gdf_proj.geometry])
+    # Build spatial indices for transit nodes (non-mixed traffic)
+    all_node_coords = np.array([(geom.x, geom.y) for geom in nodes_df_proj.geometry])
     transit_node_coords = np.array([(geom.x, geom.y) for geom in transit_nodes_gdf_proj.geometry])
 
     all_nodes_tree = BallTree(all_node_coords)
-    drive_nodes_tree = BallTree(drive_node_coords)
     transit_nodes_tree = BallTree(transit_node_coords)
 
     # Initialize results
@@ -917,19 +1046,18 @@ def create_feed_from_gtfs_model(
     stops_gdf_proj["match_distance_ft"] = None
     
     # Build transit graph for connectivity-aware matching
-    transit_graph = None
     connectivity_matched_count = 0
     
-    if "transit" in links_df.columns:
-        transit_links = links_df[links_df["transit"] == True]
-        if len(transit_links) > 0:
-            transit_graph = build_transit_graph(transit_links)
-            WranglerLogger.info(f"Built transit graph with {len(transit_graph)} nodes for connectivity matching")
-            WranglerLogger.debug(f"transit_graph:{transit_graph}")
+    transit_only_links = roadway_net.links_df[ (roadway_net.links_df["rail_only"] == True) | (roadway_net.links_df["ferry_only"] == True)]
+    if len(transit_only_links) > 0:
+        transit_graph = build_transit_graph(transit_only_links)
+        WranglerLogger.info(f"Built transit graph with {len(transit_graph)} nodes for connectivity matching")
+        WranglerLogger.debug(f"transit_graph:{transit_graph}")
     
-    # Handle connectivity-based matching for sequences of non-mixed-traffic stops
-    if transit_graph:
-        connectivity_matched_count = match_stops_with_connectivity_for_non_mixed_traffic_sequences(
+        # Handle connectivity-based matching for sequences of stations (non-mixed-traffic stops)
+        # This will update stops_gdf_proj, adding model_node_id and match_distance_ft to stops 
+        # that are not in mixed traffic.
+        connectivity_matched_count = match_stops_with_connectivity_for_station_sequences(
             gtfs_model,
             stops_gdf_proj,
             transit_nodes_gdf_proj,
@@ -938,79 +1066,20 @@ def create_feed_from_gtfs_model(
         )
     
 
-    # Match remaining street-level transit stops (not already matched by connectivity)
-    unmatched_mask = stops_gdf_proj["model_node_id"].isna()
-    mixed_traffic_stops_unmatched = mixed_traffic_stops[mixed_traffic_stops.index.isin(stops_gdf_proj[unmatched_mask].index)]
-    
-    if len(mixed_traffic_stops_unmatched) > 0:
-        # Match all remaining mixed traffic stops to drive-accessible nodes
-        mixed_traffic_indices = stops_gdf_proj[stops_gdf_proj["stop_in_mixed_traffic"] & unmatched_mask].index
-        
-        # Log counts
-        WranglerLogger.info(
-            f"Matching {len(mixed_traffic_indices):,} remaining mixed traffic stops to drive-accessible nodes"
-        )
-        
-        # Match all mixed traffic stops to drive-accessible nodes
-        if len(mixed_traffic_indices) > 0:
-            mixed_traffic_coords = np.array(
-                [(geom.x, geom.y) for geom in stops_gdf_proj.loc[mixed_traffic_indices].geometry]
-            )
-            WranglerLogger.debug(
-                f"Matching {len(mixed_traffic_coords):,} mixed traffic stops to {len(drive_accessible_nodes_gdf):,} drive-accessible nodes"
-            )
-            distances, indices = drive_nodes_tree.query(mixed_traffic_coords, k=1)
-            
-            for i, stop_idx in enumerate(mixed_traffic_indices):
-                if distances[i][0] <= MAX_STOP_DISTANCE_MILES * FEET_PER_MILE:
-                    stops_gdf_proj.loc[stop_idx, "model_node_id"] = drive_accessible_nodes_gdf.iloc[indices[i][0]][
-                        "model_node_id"
-                    ]
-                    stops_gdf_proj.loc[stop_idx, "match_distance_ft"] = distances[i][0]
-                else:
-                    # Get agency and route info for this stop
-                    agency_ids = stops_gdf_proj.loc[stop_idx, 'agency_ids'] if isinstance(stops_gdf_proj.loc[stop_idx, 'agency_ids'], list) else []
-                    agency_names = stops_gdf_proj.loc[stop_idx, 'agency_names'] if isinstance(stops_gdf_proj.loc[stop_idx, 'agency_names'], list) else []
-                    route_names = stops_gdf_proj.loc[stop_idx, 'route_names'] if isinstance(stops_gdf_proj.loc[stop_idx, 'route_names'], list) else []
-                    
-                    # Format agency and route info for logging
-                    if agency_names:
-                        # Use agency names with IDs in parentheses
-                        agency_list = []
-                        for j, agency_id in enumerate(agency_ids):
-                            if j < len(agency_names) and agency_names[j]:
-                                agency_list.append(f"{agency_names[j]} ({agency_id})")
-                            else:
-                                agency_list.append(str(agency_id))
-                        agency_info = f"Agencies: {', '.join(agency_list)}"
-                    elif agency_ids:
-                        agency_info = f"Agencies: {', '.join(map(str, agency_ids))}"
-                    else:
-                        agency_info = "No agency info"
-                    
-                    route_info = f"Routes: {', '.join(map(str, route_names[:5]))}" + ("..." if len(route_names) > 5 else "") if route_names else ""
-                    
-                    distance_ft = distances[i][0]
-                    distance_miles = distance_ft / FEET_PER_MILE
-                    WranglerLogger.warning(
-                        f"Stop {stops_gdf_proj.loc[stop_idx, 'stop_id']} ({stops_gdf_proj.loc[stop_idx, 'stop_name']}) "
-                        f"is {distance_miles:.2f} mi ({distance_ft:.1f} ft) from nearest drive node - exceeds {MAX_STOP_DISTANCE_MILES} mi threshold. "
-                        f"{agency_info}. {route_info}"
-                    )
-            
-            if len(distances) > 0:
-                avg_dist = np.mean(distances)
-                max_dist = np.max(distances)
-                WranglerLogger.debug(
-                    f"  Mixed traffic stops - Average distance: {avg_dist:.1f} ft, Max distance: {max_dist:.1f} ft"
-                )
-        
-        WranglerLogger.info(f"Matched {len(mixed_traffic_stops_unmatched):,} mixed traffic stops (excluding connectivity-matched)")
+    # Match remaining mixed-traffic transit stops (not already matched by connectivity)
+    mixed_traffic_matched_count = match_stops_for_mixed_traffic(
+        stops_gdf_proj,
+        roadway_net,
+        crs="EPSG:2227",
+        max_distance_ft=MAX_STOP_DISTANCE_MILES * FEET_PER_MILE
+    )
 
     # Match remaining non-street transit stops to transit-accessible nodes (not already matched by connectivity)
-    non_mixed_traffic_stops_unmatched = non_mixed_traffic_stops[non_mixed_traffic_stops.index.isin(stops_gdf_proj[unmatched_mask].index)]
-    
-    if len(non_mixed_traffic_stops_unmatched) > 0:
+    unmatched_mask = stops_gdf_proj["model_node_id"].isna()
+    station_stops = stops_gdf_proj[~stops_gdf_proj["stop_in_mixed_traffic"]]
+    station_stops_unmatched = station_stops[station_stops.index.isin(stops_gdf_proj[unmatched_mask].index)]
+    WranglerLogger.debug(f"station_stops_unmatched:\n{station_stops_unmatched}")
+    if len(station_stops_unmatched) > 0:
         non_street_stop_indices = stops_gdf_proj[~stops_gdf_proj["stop_in_mixed_traffic"] & unmatched_mask].index
         non_street_stop_coords = np.array(
             [(geom.x, geom.y) for geom in stops_gdf_proj.loc[non_street_stop_indices].geometry]
@@ -1037,7 +1106,7 @@ def create_feed_from_gtfs_model(
 
         non_street_avg_dist = np.mean(distances)
         non_street_max_dist = np.max(distances)
-        WranglerLogger.info(f"Matched {len(non_mixed_traffic_stops):,} non-street transit stops to transit-accessible nodes")
+        WranglerLogger.info(f"Matched {len(station_stops):,} non-street transit stops to transit-accessible nodes")
         WranglerLogger.debug(
             f"  Non-street transit stops - Average distance: {non_street_avg_dist:.1f} ft, Max distance: {non_street_max_dist:.1f} ft"
         )
@@ -1046,24 +1115,14 @@ def create_feed_from_gtfs_model(
     avg_distance = stops_gdf_proj["match_distance_ft"].mean()
     max_distance = stops_gdf_proj["match_distance_ft"].max()
     
-    # Count stops by matching method
-    connectivity_matched = 0
-    if transit_graph:
-        # Count stops that were matched through connectivity
-        # These are non-mixed-traffic stops that have a model_node_id assigned
-        connectivity_matched = len(stops_gdf_proj[
-            (~stops_gdf_proj['stop_in_mixed_traffic']) & 
-            stops_gdf_proj['model_node_id'].notna()
-        ])
-    
     total_matched = stops_gdf_proj['model_node_id'].notna().sum()
-    regular_matched = total_matched - connectivity_matched
+    regular_matched = total_matched - connectivity_matched_count
     
     WranglerLogger.info(
         f"Stop matching complete. Total: {total_matched:,} stops matched"
     )
     WranglerLogger.info(
-        f"  - Connectivity-based: {connectivity_matched:,} stops"
+        f"  - Connectivity-based: {connectivity_matched_count:,} stops"
     )
     WranglerLogger.info(
         f"  - Nearest-node: {regular_matched:,} stops"
@@ -1162,7 +1221,7 @@ def create_feed_from_gtfs_model(
             # Use the all_nodes_tree from stop matching if available, or create new one
             if "all_nodes_tree" not in locals():
                 all_node_coords = np.array(
-                    [(geom.x, geom.y) for geom in all_nodes_gdf_proj.geometry]
+                    [(geom.x, geom.y) for geom in nodes_df_proj.geometry]
                 )
                 all_nodes_tree = BallTree(all_node_coords)
 
@@ -1174,7 +1233,7 @@ def create_feed_from_gtfs_model(
             shape_distances, shape_indices = all_nodes_tree.query(shape_coords, k=1)
 
             # Extract node IDs
-            shape_node_ids = [all_nodes_gdf_proj.iloc[idx[0]]["model_node_id"] for idx in shape_indices]
+            shape_node_ids = [nodes_df_proj.iloc[idx[0]]["model_node_id"] for idx in shape_indices]
 
             shapes_df["shape_model_node_id"] = shape_node_ids
             WranglerLogger.info("Shape point mapping complete (using all roadway nodes)")
