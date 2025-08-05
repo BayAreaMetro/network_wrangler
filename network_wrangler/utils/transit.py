@@ -1000,8 +1000,48 @@ def create_feed_from_gtfs_model(
     mask = stops_gdf_proj["serves_mixed_and_station_types"]
     stops_gdf_proj.loc[mask, "stop_in_mixed_traffic"] = ~stops_gdf_proj.loc[mask, "name_includes_station"]
 
+    # Handle parent stations that may not be included in trips
+    # For these, set child_stop_in_mixed_traffic if any of the child stops has stop_in_mixed_traffic == True
+    if "parent_station" in stops_gdf_proj.columns:
+        # Create a subset of child stops with their parent_station and stop_in_mixed_traffic status
+        child_stops = stops_gdf_proj[stops_gdf_proj["parent_station"].notna() & (stops_gdf_proj["parent_station"] != "")][
+            ["parent_station", "stop_in_mixed_traffic"]
+        ].copy()
+        
+        if len(child_stops) > 0:
+            # Group by parent_station and check if any child is in mixed traffic
+            parent_mixed_traffic = child_stops.groupby("parent_station")["stop_in_mixed_traffic"].any().reset_index()
+            parent_mixed_traffic.columns = ["stop_id", "child_stop_in_mixed_traffic"]
+            parent_mixed_traffic["is_parent"] = True
+            WranglerLogger.debug(f"parent_mixed_traffic:\n{parent_mixed_traffic}")
+            
+            # Merge back to the main dataframe
+            stops_gdf_proj = stops_gdf_proj.merge(
+                parent_mixed_traffic,
+                on="stop_id",
+                how="left"
+            )
+            
+            # Fill NaN values with False (stops that are not parent stations)
+            stops_gdf_proj["is_parent"] = stops_gdf_proj["is_parent"].fillna(False)
+            stops_gdf_proj["child_stop_in_mixed_traffic"] = stops_gdf_proj["child_stop_in_mixed_traffic"].fillna(False)
+            
+            # Log parent stations with child stops in mixed traffic
+            WranglerLogger.debug(
+                f"Parent stations with mixed traffic children:\n" + \
+                f"{stops_gdf_proj.loc[stops_gdf_proj['child_stop_in_mixed_traffic'] == True, ['stop_id', 'stop_name', 'child_stop_in_mixed_traffic']]}"
+            )
+    else:
+        stops_gdf_proj["is_parent"] = False
+        stops_gdf_proj["child_stop_in_mixed_traffic"] = False
+
+    # for stops with stop_in_mixed_traffic.isna() that are parents, inherit child's state
+    stops_gdf_proj.loc[ 
+        stops_gdf_proj["stop_in_mixed_traffic"].isna() & stops_gdf_proj["is_parent"], 
+        "stop_in_mixed_traffic"
+    ] = stops_gdf_proj["child_stop_in_mixed_traffic"]
+
     # Log stops without stop_in_mixed_traffic set.
-    # These are likely parent_stations, so set stop_in_mixed_traffic=False
     unmatched_stops = stops_gdf_proj[stops_gdf_proj["stop_in_mixed_traffic"].isna()]
     if len(unmatched_stops) > 0:
         WranglerLogger.debug(f"unmatched_stops:\n{unmatched_stops}")
@@ -1013,11 +1053,14 @@ def create_feed_from_gtfs_model(
         f"{stop_in_mixed_traffic_value_counts[False]:,} stations"
     )
 
-    # columns: stops.txt columns: stop_id, stop_name, stop_code, stop_lat, stop_lon, zone_id, stop_url, 
-    #                             tts_stop_name, platform_code, location_type, parent_station, stop_timezone, 
-    #                             wheelchair_boarding, level_id, geometry
-    # added by this method: agency_ids, agency_names, route_ids, route_names, route_types, 
-    #                       stop_in_mixed_traffic, name_includes_station, serves_mixed_and_station_types
+    # Columns from GTFS stops.txt: 
+    #   stop_id, stop_name, stop_code, stop_lat, stop_lon, zone_id, stop_url, 
+    #   tts_stop_name, platform_code, location_type, parent_station, stop_timezone, 
+    #   wheelchair_boarding, level_id, geometry
+    # added by this method: 
+    #   agency_ids, agency_names, route_ids, route_names, route_types, 
+    #   stop_in_mixed_traffic, name_includes_station, serves_mixed_and_station_types
+    #   child_stop_in_mixed_traffic, is_parent
     # Log some examples
     if stop_in_mixed_traffic_value_counts[True] > 0:
         WranglerLogger.debug(f"Mixed-traffic transit stops:\n{stops_gdf_proj.loc[stops_gdf_proj.stop_in_mixed_traffic == True]}")
