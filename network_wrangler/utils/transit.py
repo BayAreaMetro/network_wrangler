@@ -1000,10 +1000,11 @@ def create_feed_from_gtfs_model(
     mask = stops_gdf_proj["serves_mixed_and_station_types"]
     stops_gdf_proj.loc[mask, "stop_in_mixed_traffic"] = ~stops_gdf_proj.loc[mask, "name_includes_station"]
 
-    # Check for stops without route type info
-    # This shouldn't happen because gtfs_model would have caught this
+    # Log stops without stop_in_mixed_traffic set.
+    # These are likely parent_stations, so set stop_in_mixed_traffic=False
     unmatched_stops = stops_gdf_proj[stops_gdf_proj["stop_in_mixed_traffic"].isna()]
-    assert(len(unmatched_stops) == 0)
+    if len(unmatched_stops) > 0:
+        WranglerLogger.debug(f"unmatched_stops:\n{unmatched_stops}")
     stops_gdf_proj["stop_in_mixed_traffic"] = stops_gdf_proj["stop_in_mixed_traffic"].fillna(False)
 
     stop_in_mixed_traffic_value_counts = stops_gdf_proj["stop_in_mixed_traffic"].value_counts()
@@ -1478,10 +1479,10 @@ def filter_transit_by_boundary(
         # Need to ensure stop_times only includes trips that are in filtered_trips
         filtered_stop_times_for_truncation = stop_times_df[stop_times_df.trip_id.isin(filtered_trip_ids)]
         
-        # First update transit_data with filtered data before truncation
-        transit_data.routes = filtered_routes
-        transit_data.trips = filtered_trips
+        # First update transit_data with filtered data before truncation (in order to maintain validation)
         transit_data.stop_times = filtered_stop_times_for_truncation
+        transit_data.trips = filtered_trips
+        transit_data.routes = filtered_routes
         
         # Process each route that needs truncation
         for route_id in routes_needing_truncation:
@@ -1556,19 +1557,46 @@ def filter_transit_by_boundary(
                     )
         
         # After truncation, transit_data has been modified in place
-        # Just update references to current state
-        filtered_stops = transit_data.stops
+        # Update references to current state (in order to maintain validation)
         filtered_stop_times = transit_data.stop_times
         filtered_trips = transit_data.trips
         filtered_routes = transit_data.routes
+        filtered_stops = transit_data.stops
     else:
         # No truncation needed - update transit_data with filtered data
         filtered_stop_times = stop_times_df[stop_times_df.trip_id.isin(filtered_trip_ids)].copy()
         filtered_stops = stops_df[stops_df.stop_id.isin(filtered_stop_times.stop_id.unique())].copy()
         
-        transit_data.routes = filtered_routes
-        transit_data.trips = filtered_trips
+        # Check if any of the filtered stops reference parent stations
+        if "parent_station" in filtered_stops.columns:
+            # Get parent stations that are referenced by kept stops
+            parent_stations = filtered_stops["parent_station"].dropna().unique()
+            parent_stations = [ps for ps in parent_stations if ps != ""]  # Remove empty strings
+            
+            if len(parent_stations) > 0:
+                # Find parent stations that aren't already in our filtered stops
+                existing_stop_ids = set(filtered_stops.stop_id)
+                missing_parent_stations = [ps for ps in parent_stations if ps not in existing_stop_ids]
+                
+                if len(missing_parent_stations) > 0:
+                    WranglerLogger.info(
+                        f"Adding back {len(missing_parent_stations)} parent stations referenced by kept stops"
+                    )
+                    
+                    # Get the parent station records
+                    parent_station_records = stops_df[
+                        stops_df.stop_id.isin(missing_parent_stations)
+                    ]
+                    
+                    # Append parent stations to filtered stops
+                    filtered_stops = pd.concat(
+                        [filtered_stops, parent_station_records], 
+                        ignore_index=True
+                    )
+        
         transit_data.stop_times = filtered_stop_times
+        transit_data.trips = filtered_trips
+        transit_data.routes = filtered_routes
         transit_data.stops = filtered_stops
     
     # Log details about removed stops
@@ -1740,7 +1768,7 @@ def drop_transit_agency(
             
             if len(missing_parent_stations) > 0:
                 WranglerLogger.info(
-                    f"Adding {len(missing_parent_stations)} parent stations referenced by kept stops"
+                    f"Adding back {len(missing_parent_stations)} parent stations referenced by kept stops"
                 )
                 
                 # Get the parent station records
@@ -1767,12 +1795,11 @@ def drop_transit_agency(
     )
     WranglerLogger.debug(f"Stops removed:\n{stops_df.loc[~stops_df['stop_id'].isin(stops_still_used)]}")
     
-    # Update tables in place
-    # Always update the core tables
-    transit_data.stops = stops_to_keep
-    transit_data.routes = routes_to_keep
-    transit_data.trips = trips_to_keep
+    # Update tables in place, in order so that validation is ok
     transit_data.stop_times = stop_times_to_keep
+    transit_data.trips = trips_to_keep
+    transit_data.routes = routes_to_keep
+    transit_data.stops = stops_to_keep
     
     # Handle agency table
     if hasattr(transit_data, 'agency') and transit_data.agency is not None:
@@ -1975,8 +2002,35 @@ def truncate_route_at_stop(
     stops_still_used = set(all_stop_times.stop_id.unique())
     filtered_stops = stops_df[stops_df.stop_id.isin(stops_still_used)]
     
+    # Check if any of these stops reference parent stations
+    if "parent_station" in filtered_stops.columns:
+        # Get parent stations that are referenced by kept stops
+        parent_stations = filtered_stops["parent_station"].dropna().unique()
+        parent_stations = [ps for ps in parent_stations if ps != ""]  # Remove empty strings
+        
+        if len(parent_stations) > 0:
+            # Find parent stations that aren't already in our filtered stops
+            existing_stop_ids = set(filtered_stops.stop_id)
+            missing_parent_stations = [ps for ps in parent_stations if ps not in existing_stop_ids]
+            
+            if len(missing_parent_stations) > 0:
+                WranglerLogger.info(
+                    f"Adding back {len(missing_parent_stations)} parent stations referenced by kept stops"
+                )
+                
+                # Get the parent station records
+                parent_station_records = stops_df[
+                    stops_df.stop_id.isin(missing_parent_stations)
+                ]
+                
+                # Append parent stations to filtered stops
+                filtered_stops = pd.concat(
+                    [filtered_stops, parent_station_records], 
+                    ignore_index=True
+                )
+    
     # Log removed stops
-    removed_stops = set(stops_df.stop_id) - stops_still_used
+    removed_stops = set(stops_df.stop_id) - set(filtered_stops.stop_id)
     if removed_stops:
         WranglerLogger.debug(f"Removed {len(removed_stops)} stops that are no longer referenced")
         
@@ -1992,10 +2046,10 @@ def truncate_route_at_stop(
             WranglerLogger.debug(f"  ... and {len(removed_stops) - sample_size} more stops")
     
     # Update transit_data in place
+    transit_data.stop_times = all_stop_times
+    transit_data.trips = trips_df
     transit_data.routes = routes_df
     transit_data.stops = filtered_stops
-    transit_data.trips = trips_df
-    transit_data.stop_times = all_stop_times
     
     # Note: shapes would need to be truncated to match truncated trips
     # TODO: truncate shapes to match truncated trips
