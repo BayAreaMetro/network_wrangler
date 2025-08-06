@@ -75,8 +75,8 @@ def load_feed_from_path(
     _ambiguous_files = [t for t, v in feed_possible_files.items() if len(v) > 1]
     if _ambiguous_files:
         WranglerLogger.warning(
-            f"! More than one file matches following tables. \
-                               Using the first on the list: {_ambiguous_files}"
+            f"! More than one file matches following tables. " + \
+            f"Using the first on the list: {_ambiguous_files}"
         )
 
     feed_files = {t: f[0] for t, f in feed_possible_files.items()}
