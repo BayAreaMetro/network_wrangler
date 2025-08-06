@@ -829,23 +829,22 @@ def create_feed_from_gtfs_model(
     # Prepare different node sets for different route types
     transit_accessible_nodes_gdf = None
     
-    #TODO: convert this to use standard attributes: rail_only, bus_only and ferry_only
-    # Get nodes connected by transit links (for rail/subway)
-    if "transit" in roadway_net.links_df.columns:
-        transit_only_links = roadway_net.links_df[roadway_net.links_df["transit"] == True]
-        transit_accessible_node_ids = set(transit_only_links["A"].unique()) | set(transit_only_links["B"].unique())
-        transit_accessible_nodes_gdf = roadway_net.nodes_df[
-            roadway_net.nodes_df["model_node_id"].isin(transit_accessible_node_ids)
-        ].copy()
-        WranglerLogger.info(
-            f"Found {len(transit_accessible_nodes_gdf):,} transit-accessible nodes (for rail/ferry) " + \
-            f"out of {len(roadway_net.nodes_df):,} total"
-        )
-    else:
-        WranglerLogger.info(
-            "No transit column found in links, all nodes will be used for non-street transit"
-        )
-        transit_accessible_nodes_gdf = roadway_net.nodes_df.copy()
+    # Get nodes connected by transit-only links (rail, bus-only, or ferry)
+    transit_only_links = roadway_net.links_df[
+        (roadway_net.links_df["rail_only"] == True) | 
+        (roadway_net.links_df["bus_only"] == True) | 
+        (roadway_net.links_df["ferry_only"] == True)
+    ]
+    
+    transit_accessible_node_ids = set(transit_only_links["A"].unique()) | set(transit_only_links["B"].unique())
+    transit_accessible_nodes_gdf = roadway_net.nodes_df[
+        roadway_net.nodes_df["model_node_id"].isin(transit_accessible_node_ids)
+    ].copy()
+    
+    WranglerLogger.info(
+        f"Found {len(transit_accessible_nodes_gdf):,} transit-accessible nodes (rail/bus-only/ferry) " + \
+        f"out of {len(roadway_net.nodes_df):,} total"
+    )
 
     # create mapping from gtfs_model stop to RoadwayNetwork nodes
     # GtfsModel guarantees stops exists
