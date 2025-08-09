@@ -120,8 +120,8 @@ class TransitNetwork:
     @feed.setter
     def feed(self, feed: Feed):
         if not isinstance(feed, Feed):
-            msg = f"TransitNetwork's feed value must be a valid Feed instance. \
-                             This is a {type(feed)}."
+            msg = f"TransitNetwork's feed value must be a valid Feed instance. " + \
+                  f"This is a {type(feed)}."
             WranglerLogger.error(msg)
             raise TransitValidationError(msg)
         if self._road_net is None or transit_road_net_consistency(feed, self._road_net):
