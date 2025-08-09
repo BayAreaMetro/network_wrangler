@@ -21,7 +21,8 @@ MODES_TO_NETWORK_LINK_VARIABLES: dict[str, list[str]] = {
     "drive": ["drive_access"],
     "bus": ["bus_only", "drive_access"],
     "rail": ["rail_only"],
-    "transit": ["bus_only", "rail_only", "drive_access"],
+    "ferry": ["ferry_only"],
+    "transit": ["bus_only", "rail_only", "ferry_only", "drive_access"],
     "walk": ["walk_access"],
     "bike": ["bike_access"],
 }
