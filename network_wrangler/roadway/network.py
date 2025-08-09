@@ -30,7 +30,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from projectcard import ProjectCard, SubProject
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from ..configs import DefaultConfig, WranglerConfig, load_wrangler_config
 from ..errors import (
@@ -181,6 +181,20 @@ class RoadwayNetwork(BaseModel):
             )
             v.to_crs(LAT_LON_CRS)
         return v
+    
+    @model_validator(mode='after')
+    def validate_referential_integrity(self):
+        """Validate that all nodes referenced in links exist in nodes table."""
+        from .links.validate import validate_links_have_nodes
+        
+        WranglerLogger.debug("validate_referential_integrity(): Validating referential integrity between links and nodes")
+        try:
+            validate_links_have_nodes(self.links_df, self.nodes_df)
+        except Exception as e:
+            WranglerLogger.error(f"Referential integrity validation failed: {e}")
+            raise
+        
+        return self
 
     @property
     def shapes_df(self) -> pd.DataFrame:
