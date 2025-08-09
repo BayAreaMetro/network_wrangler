@@ -94,10 +94,10 @@ def _links_to_graph_links(
 
     # osm-nx is expecting u and v instead of A B - but first have to drop existing u/v
 
-    if "u" in graph_links_df.columns and (links_df.u != links_df.A).any():
+    if "u" in graph_links_df.columns and (graph_links_df.u != graph_links_df.A).any():
         graph_links_df = graph_links_df.drop("u", axis=1)
 
-    if "v" in graph_links_df.columns and (links_df.v != links_df.B).any():
+    if "v" in graph_links_df.columns and (graph_links_df.v != graph_links_df.B).any():
         graph_links_df = graph_links_df.drop("v", axis=1)
 
     graph_links_df = graph_links_df.rename(columns={"A": "u", "B": "v"})
@@ -178,7 +178,7 @@ def net_to_graph(net: RoadwayNetwork, mode: Optional[str] = None) -> nx.MultiDiG
     """
     _links_df = net.links_df.mode_query(mode)
 
-    _nodes_df = net.nodes_in_links()
+    _nodes_df = filter_nodes_to_links(_links_df, net.nodes_df)
 
     G = links_nodes_to_ox_graph(_links_df, _nodes_df)
 
