@@ -850,7 +850,7 @@ def create_feed_shapes(
     WranglerLogger.debug(f"feed_tables['stops'].head():\n{feed_tables['stops'].head()}")
 
     from sklearn.neighbors import BallTree    
-    WranglerLogger.info(f"Mapping {len(feed_tables['shapes']:,)} shape points to all roadway nodes")
+    WranglerLogger.info(f"Mapping {len(feed_tables['shapes']):,} shape points to all roadway nodes")
 
     # Create GeoDataFrame from shape points if not already one
     if not isinstance(feed_tables['shapes'], gpd.GeoDataFrame):
@@ -939,7 +939,7 @@ def create_feed_shapes(
     shape_coords = np.array([(geom.x, geom.y) for geom in  feed_tables['shapes'].geometry])
 
     # Find nearest nodes for all shape points at once
-    WranglerLogger.info(f"Finding nearest nodes for {len( feed_tables['shapes']):.} shape points within {max_distance} {crs_units}")
+    WranglerLogger.info(f"Finding nearest nodes for {len( feed_tables['shapes']):,} shape points within {max_distance} {crs_units}")
     shape_distances, shape_indices = all_nodes_tree.query(shape_coords, k=1)
     
     # Flatten distances array (it's 2D from query)
