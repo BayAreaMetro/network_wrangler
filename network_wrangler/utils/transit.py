@@ -816,6 +816,263 @@ def match_stops_for_mixed_traffic(
     return matched_count
 
 
+def create_feed_shapes_for_rail(feed_tables: Dict[str, pd.DataFrame]):
+    """Create shapes for rail routes (route_type == 2) based on stop sequences.
+    
+    This function modifies feed_tables['shapes'] in place by replacing shape points
+    for rail routes with sequences based on stops. It detects skip-stop patterns
+    and builds comprehensive stop sequences that include all stops along a route,
+    filling in stops that may be skipped by express services.
+    
+    Args:
+        feed_tables: Dictionary of GTFS feed tables including routes, trips, stop_times,
+                    stops, and shapes
+    """    
+    WranglerLogger.info("Creating shapes for rail routes based on stop sequences")
+    
+    # Check if necessary tables exist
+    required_tables = ['routes', 'trips', 'stop_times', 'stops', 'shapes']
+    for table in required_tables:
+        if table not in feed_tables:
+            WranglerLogger.warning(f"Table '{table}' not found in feed_tables, skipping rail shape creation")
+            return
+    
+    # Identify rail routes (route_type == 2)
+    rail_routes = feed_tables['routes'][feed_tables['routes']['route_type'] == 2]['route_id'].unique()
+    
+    if len(rail_routes) == 0:
+        WranglerLogger.debug("No rail routes found (route_type == 2)")
+        return
+    
+    WranglerLogger.info(f"Found {len(rail_routes)} rail routes to process")
+    
+    # Get all trips for rail routes
+    rail_trips = feed_tables['trips'][feed_tables['trips']['route_id'].isin(rail_routes)]
+    
+    if len(rail_trips) == 0:
+        WranglerLogger.warning("No trips found for rail routes")
+        return
+    
+    # Get all stop_times for rail trips
+    rail_stop_times = feed_tables['stop_times'][
+        feed_tables['stop_times']['trip_id'].isin(rail_trips['trip_id'])
+    ].copy()
+    
+    # Add route_id and direction_id to stop_times for grouping
+    rail_stop_times = rail_stop_times.merge(
+        rail_trips[['trip_id', 'route_id', 'direction_id', 'shape_id']],
+        on='trip_id',
+        how='left'
+    )
+    
+    # Store whether original shapes were GeoDataFrame
+    is_geodf = isinstance(feed_tables['shapes'], gpd.GeoDataFrame)
+    original_crs = feed_tables['shapes'].crs if is_geodf else None
+    
+    # Group by agency and direction to find related routes
+    # First, get agency for each route
+    route_agencies = feed_tables['routes'][['route_id', 'agency_id']]
+    rail_stop_times = rail_stop_times.merge(route_agencies, on='route_id', how='left')
+    
+    # Store new shape data
+    new_shapes_list = []
+    
+    # Process by agency and direction to detect skip-stop patterns
+    agency_dir_groups = rail_stop_times.groupby(['agency_id', 'direction_id'], observed=False)
+    
+    for (agency_id, direction_id), agency_group_df in agency_dir_groups:
+        # Get all unique stops across all routes for this agency/direction
+        all_stops_sequences = {}
+        route_stops = {}
+        
+        # Collect stops for each route
+        for route_id in agency_group_df['route_id'].unique():
+            route_df = agency_group_df[agency_group_df['route_id'] == route_id]
+            
+            # Get stops in order for this route
+            route_stop_seq = route_df.groupby('stop_id')['stop_sequence'].agg(
+                lambda x: x.mode()[0] if len(x.mode()) > 0 else x.iloc[0]
+            ).sort_values()
+            
+            route_stops[route_id] = route_stop_seq.index.tolist()
+            
+            # Add to overall stop sequence tracking
+            for stop_id in route_stop_seq.index:
+                if stop_id not in all_stops_sequences:
+                    all_stops_sequences[stop_id] = []
+                all_stops_sequences[stop_id].append(route_stop_seq[stop_id])
+        
+        # Find the most comprehensive route (likely the local)
+        max_stops_route = max(route_stops, key=lambda k: len(route_stops[k]))
+        local_stops = route_stops[max_stops_route]
+        
+        WranglerLogger.debug(
+            f"Agency {agency_id} direction {direction_id}: "
+            f"Route {max_stops_route} appears to be local with {len(local_stops)} stops"
+        )
+        
+        # Build comprehensive stop list by merging all routes' stops
+        # Start with the local route's stops as the base
+        comprehensive_stops = local_stops.copy()
+        
+        # For other routes, check if they're skip-stop versions
+        for route_id, stops in route_stops.items():
+            if route_id == max_stops_route:
+                continue
+                
+            # Check if this route's stops are a subset of the local
+            is_subset = all(stop in local_stops for stop in stops)
+            
+            if is_subset:
+                WranglerLogger.debug(
+                    f"  Route {route_id} appears to be skip-stop "
+                    f"({len(stops)}/{len(local_stops)} stops)"
+                )
+            else:
+                # Some stops might not be in the local - add them
+                for i, stop in enumerate(stops):
+                    if stop not in comprehensive_stops:
+                        # Find where to insert this stop
+                        if i > 0 and stops[i-1] in comprehensive_stops:
+                            # Insert after the previous stop
+                            idx = comprehensive_stops.index(stops[i-1]) + 1
+                            comprehensive_stops.insert(idx, stop)
+                        elif i < len(stops)-1 and stops[i+1] in comprehensive_stops:
+                            # Insert before the next stop
+                            idx = comprehensive_stops.index(stops[i+1])
+                            comprehensive_stops.insert(idx, stop)
+                        else:
+                            # Add to end if we can't determine position
+                            comprehensive_stops.append(stop)
+                
+                WranglerLogger.debug(
+                    f"  Route {route_id} has unique stops, merged into comprehensive list"
+                )
+        
+        WranglerLogger.info(
+            f"Agency {agency_id} direction {direction_id}: "
+            f"Built comprehensive sequence with {len(comprehensive_stops)} stops "
+            f"(from {len(route_stops)} routes): {comprehensive_stops}"
+        )
+        
+        # Now create shapes for each route using the comprehensive stop list
+        for route_id in agency_group_df['route_id'].unique():
+            route_df = agency_group_df[agency_group_df['route_id'] == route_id]
+            shape_ids = route_df['shape_id'].dropna().unique()
+            
+            # Get route metadata for this route
+            route_info = feed_tables['routes'][feed_tables['routes']['route_id'] == route_id].iloc[0]
+            route_type = route_info['route_type']
+            route_short_name = route_info.get('route_short_name', '')
+            agency_name = ''
+            if 'agency_id' in route_info and pd.notna(route_info['agency_id']):
+                agency_matches = feed_tables['agencies'][feed_tables['agencies']['agency_id'] == route_info['agency_id']]
+                if len(agency_matches) > 0:
+                    agency_name = agency_matches.iloc[0].get('agency_name', '')
+            
+            for shape_id in shape_ids:
+                # Get all trips using this shape
+                shape_trips = route_df[route_df['shape_id'] == shape_id]['trip_id'].unique().tolist()
+                
+                # Get unique (route_id, direction_id) tuples for this shape
+                route_dir_tuples = route_df[route_df['shape_id'] == shape_id][['route_id', 'direction_id']].drop_duplicates()
+                route_dir_ids = [tuple(row) for row in route_dir_tuples.itertuples(index=False, name=None)]
+                
+                # Create shape points from comprehensive stops
+                for seq_num, stop_id in enumerate(comprehensive_stops):
+                    # Get stop coordinates and other info
+                    stop_info = feed_tables['stops'][feed_tables['stops']['stop_id'] == stop_id]
+                    
+                    if len(stop_info) == 0:
+                        WranglerLogger.warning(f"Stop {stop_id} not found in stops table")
+                        continue
+                    
+                    stop_row = stop_info.iloc[0]
+                    
+                    # Create shape point entry
+                    shape_point = {
+                        'shape_id': shape_id,
+                        'shape_pt_lat': stop_row['stop_lat'],
+                        'shape_pt_lon': stop_row['stop_lon'],
+                        'shape_pt_sequence': seq_num,
+                        # Add metadata fields
+                        'trip_ids': shape_trips,
+                        'route_dir_ids': route_dir_ids,
+                        'agency_ids': [agency_id] if pd.notna(agency_id) else [],
+                        'agency_names': [agency_name] if agency_name else [],
+                        'route_ids': [route_id],
+                        'route_names': [route_short_name] if route_short_name else [],
+                        'route_types': [route_type]
+                    }
+                    
+                    # Add shape_model_node_id if available from stop
+                    if 'shape_model_node_id' in stop_row and pd.notna(stop_row['shape_model_node_id']):
+                        shape_point['shape_model_node_id'] = stop_row['shape_model_node_id']
+                    elif 'model_node_id' in stop_row and pd.notna(stop_row['model_node_id']):
+                        shape_point['shape_model_node_id'] = stop_row['model_node_id']
+                    
+                    # Create geometry if original was GeoDataFrame
+                    if is_geodf:
+                        shape_point['geometry'] = shapely.geometry.Point(
+                            stop_row['stop_lon'], stop_row['stop_lat']
+                        )
+                        
+                    new_shapes_list.append(shape_point)
+    
+    if len(new_shapes_list) == 0:
+        WranglerLogger.info("No new shape points created for rail routes")
+        return
+    
+    # Create DataFrame from new shapes
+    new_shapes_df = pd.DataFrame(new_shapes_list)
+    
+    # Convert to GeoDataFrame if original was GeoDataFrame
+    if is_geodf:
+        new_shapes_df = gpd.GeoDataFrame(new_shapes_df, geometry='geometry', crs=WGS84)
+        if original_crs is not None and original_crs != WGS84:
+            # Project to original CRS if it was different
+            new_shapes_df = new_shapes_df.to_crs(original_crs)
+    
+    # Get list of rail shape_ids that we're replacing
+    rail_shape_ids = new_shapes_df['shape_id'].unique()
+    
+    # Remove old shape points for rail routes
+    original_shape_count = len(feed_tables['shapes'])
+    feed_tables['shapes'] = feed_tables['shapes'][
+        ~feed_tables['shapes']['shape_id'].isin(rail_shape_ids)
+    ]
+    
+    # Add new rail shape points
+    # Preserve column order and types from original shapes
+    for col in feed_tables['shapes'].columns:
+        if col not in new_shapes_df.columns:
+            new_shapes_df[col] = None
+    
+    # Reorder columns to match original
+    new_shapes_df = new_shapes_df[feed_tables['shapes'].columns]
+    
+    WranglerLogger.debug("Before concatenating new rail shapes with non-rail shapes:")
+    WranglerLogger.debug(f"feed_tables['shapes']:\n{feed_tables['shapes']}")
+    WranglerLogger.debug(f"new_shapes_df:\n{new_shapes_df}")
+
+    # Concatenate with non-rail shapes
+    if len(feed_tables['shapes']) > 0:
+        feed_tables['shapes'] = pd.concat([feed_tables['shapes'], new_shapes_df], ignore_index=True)
+    else:
+        feed_tables['shapes'] = new_shapes_df
+    
+    # Sort by shape_id and shape_pt_sequence
+    feed_tables['shapes'] = feed_tables['shapes'].sort_values(
+        ['shape_id', 'shape_pt_sequence']
+    ).reset_index(drop=True)
+    
+    new_shape_count = len(feed_tables['shapes'])
+    WranglerLogger.info(
+        f"Replaced shapes for {len(rail_shape_ids)} rail routes. "
+        f"Shape points: {original_shape_count:,} -> {new_shape_count:,}"
+    )
+
+
 def create_feed_shapes(
     feed_tables: Dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
@@ -970,14 +1227,8 @@ def create_feed_shapes(
     #                 child_stop_in_mixed_traffic, is_parent, match_distance_{crs_units}, gtfs_stop_id
 
 
-    # TODO: write a method to do special handling for route_type == 2, rail.
-    # create_feed_shapes_for_rail(feed_tables) will modify the feed_tables in place by updating the shapes for
-    # only rail.
-    # For these, we'll start with the stops and group them by route_id, direction_id and then sequence the stops.
-    # We'll correlate routes with common stops for an agency, and build a sequence of the most local version of
-    # those routes.
-    # We'll ignore the existing shape points for these routes/trips, and set them instead to be
-    # the sequence of stops, plus intermediate stops that may be skipped.
+    # Special handling for rail routes (route_type == 2)
+    create_feed_shapes_for_rail(feed_tables)
 
     # First, find very close stops to shape points where (route_id, direction_id) match
     # This allows us to reuse stop model_node_id assignments for matching shape points
