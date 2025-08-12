@@ -14,6 +14,9 @@ DEFAULT_TIMESPAN: list[str] = ["00:00", "24:00"]
 DEFAULT_CATEGORY: str = "any"
 
 DEFAULT_SEARCH_MODES: list = ["drive"]
+"""
+lmz: Why isn't this any?
+"""
 
 DEFAULT_DELETE_MODES: list = ["any"]
 

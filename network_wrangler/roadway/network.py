@@ -329,7 +329,7 @@ class RoadwayNetwork(BaseModel):
             )
             raise SelectionError(msg)
 
-        WranglerLogger.debug(f"Getting selection from key: {key}")
+        WranglerLogger.debug(f"Getting selection from key: {key}  selection_data={selection_data}")
         if "links" in selection_data.fields:
             return RoadwayLinkSelection(self, selection_dict)
         if "nodes" in selection_data.fields:
@@ -824,7 +824,7 @@ class RoadwayNetwork(BaseModel):
         # Delete original links - we need to delete by the model_link_id values
         orig_model_link_id = orig_link['model_link_id']
         links_to_delete = [orig_model_link_id] + reverse_link_ids
-        self.delete_links({"model_link_id": links_to_delete}, clean_nodes=False, clean_shapes=False)
+        self.delete_links({"model_link_id": links_to_delete, 'modes':["any"]}, clean_nodes=False, clean_shapes=False)
         
         # Add new links
         new_links_data = [link1_data, link2_data]
