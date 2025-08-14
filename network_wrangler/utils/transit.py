@@ -1792,7 +1792,17 @@ def create_feed_shapes(
 
     if len(invalid_shape_sequences_gdf) > 0:
         # Convert invalid segments to 2-Point LineString geodataframe
-        
+
+        # remove lines with the two points having the same location
+        # TODO: Fix this upstream?
+        same_points_gdf = invalid_shape_sequences_gdf.loc[ 
+            (invalid_shape_sequences_gdf.shape_pt_lon==invalid_shape_sequences_gdf.next_pt_lon) &
+            (invalid_shape_sequences_gdf.shape_pt_lat==invalid_shape_sequences_gdf.next_pt_lat)]
+        WranglerLogger.debug(f"Removing lines with A location == B location:\n{same_points_gdf}")
+        invalid_shape_sequences_gdf = invalid_shape_sequences_gdf.loc[
+            (invalid_shape_sequences_gdf.shape_pt_lon != invalid_shape_sequences_gdf.next_pt_lon) |
+            (invalid_shape_sequences_gdf.shape_pt_lat != invalid_shape_sequences_gdf.next_pt_lat)]
+
         # Create LineStrings from start and end points
         segment_lines = []
         for _, row in invalid_shape_sequences_gdf.iterrows():
