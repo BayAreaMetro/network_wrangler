@@ -151,7 +151,7 @@ def links_nodes_to_ox_graph(
     # WranglerLogger.debug(f"graph_links_df:\n{graph_links_df}")
 
     try:
-        WranglerLogger.debug("starting ox.gdfs_to_graph()")
+        WranglerLogger.debug(f"starting ox.graph_from_gdfs() with {len(graph_nodes_df)=:,} {len(graph_links_df)=:,}")
         G = ox.graph_from_gdfs(graph_nodes_df, graph_links_df)
 
     except AttributeError as attr_error:
