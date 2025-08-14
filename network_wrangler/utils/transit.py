@@ -886,19 +886,19 @@ def match_stops_for_mixed_traffic(
     return matched_count
 
 
-def create_feed_shapes_for_rail(feed_tables: Dict[str, pd.DataFrame]):
-    """Create shapes for rail routes (route_type == 2) based on stop sequences.
+def create_feed_shapes_for_station_only_route_types(feed_tables: Dict[str, pd.DataFrame]):
+    """Create shapes for statioin-only routes (STATION_ONLY_ROUTE_TYPES) based on stop sequences.
     
     This function modifies feed_tables['shapes'] in place by replacing shape points
-    for rail routes with sequences based on stops. It detects skip-stop patterns
-    and builds comprehensive stop sequences that include all stops along a route,
-    filling in stops that may be skipped by express services.
+    for STATION_ONLY_ROUTE_TYPES routes with sequences based on stops. 
+    It detects skip-stop patterns and builds comprehensive stop sequences
+    that include all stops along a route, filling in stops that may be skipped by express services.
     
     Args:
         feed_tables: Dictionary of GTFS feed tables including routes, trips, stop_times,
                     stops, and shapes
     """    
-    WranglerLogger.info("Creating shapes for rail routes based on stop sequences")
+    WranglerLogger.info("Creating shapes for STATION_ONLY_ROUTE_TYPES based on stop sequences")
     
     # Check if necessary tables exist
     required_tables = ['routes', 'trips', 'stop_times', 'stops', 'shapes']
@@ -907,30 +907,30 @@ def create_feed_shapes_for_rail(feed_tables: Dict[str, pd.DataFrame]):
             WranglerLogger.warning(f"Table '{table}' not found in feed_tables, skipping rail shape creation")
             return
     
-    # Identify rail routes (route_type == 2)
-    rail_routes = feed_tables['routes'][feed_tables['routes']['route_type'] == 2]['route_id'].unique()
+    # Identify STATION_ONLY_ROUTE_TYPES routes
+    station_only_routes = feed_tables['routes'][feed_tables['routes']['route_type'].isin(STATION_ONLY_ROUTE_TYPES)]['route_id'].unique()
     
-    if len(rail_routes) == 0:
-        WranglerLogger.debug("No rail routes found (route_type == 2)")
+    if len(station_only_routes) == 0:
+        WranglerLogger.debug("No STATION_ONLY_ROUTE_TYPES routes found")
         return
     
-    WranglerLogger.info(f"Found {len(rail_routes)} rail routes to process")
+    WranglerLogger.info(f"Found {len(station_only_routes)} station-only routes to process")
     
     # Get all trips for rail routes
-    rail_trips = feed_tables['trips'][feed_tables['trips']['route_id'].isin(rail_routes)]
+    station_only_trips = feed_tables['trips'][feed_tables['trips']['route_id'].isin(station_only_routes)]
     
-    if len(rail_trips) == 0:
+    if len(station_only_trips) == 0:
         WranglerLogger.warning("No trips found for rail routes")
         return
     
     # Get all stop_times for rail trips
-    rail_stop_times = feed_tables['stop_times'][
-        feed_tables['stop_times']['trip_id'].isin(rail_trips['trip_id'])
+    station_only_stop_times = feed_tables['stop_times'][
+        feed_tables['stop_times']['trip_id'].isin(station_only_trips['trip_id'])
     ].copy()
     
     # Add route_id and direction_id to stop_times for grouping
-    rail_stop_times = rail_stop_times.merge(
-        rail_trips[['trip_id', 'route_id', 'direction_id', 'shape_id']],
+    station_only_stop_times = station_only_stop_times.merge(
+        station_only_trips[['trip_id', 'route_id', 'direction_id', 'shape_id']],
         on='trip_id',
         how='left'
     )
@@ -942,13 +942,13 @@ def create_feed_shapes_for_rail(feed_tables: Dict[str, pd.DataFrame]):
     # Group by agency and direction to find related routes
     # First, get agency for each route
     route_agencies = feed_tables['routes'][['route_id', 'agency_id']]
-    rail_stop_times = rail_stop_times.merge(route_agencies, on='route_id', how='left')
+    station_only_stop_times = station_only_stop_times.merge(route_agencies, on='route_id', how='left')
     
     # Store new shape data
     new_shapes_list = []
     
     # Process by agency and direction to detect skip-stop patterns
-    agency_dir_groups = rail_stop_times.groupby(['agency_id', 'direction_id'], observed=False)
+    agency_dir_groups = station_only_stop_times.groupby(['agency_id', 'direction_id'], observed=False)
     
     for (agency_id, direction_id), agency_group_df in agency_dir_groups:
         # Get all unique stops across all routes for this agency/direction
@@ -999,6 +999,10 @@ def create_feed_shapes_for_rail(feed_tables: Dict[str, pd.DataFrame]):
                     f"({len(stops)}/{len(local_stops)} stops)"
                 )
             else:
+                LOCAL_EXTRA_STOPS = 5
+                # TODO: Only do the following if there are <= LOCAL_EXTRA_STOPS
+                # TODO: Otherwise, assume it's a different route
+                
                 # Some stops might not be in the local - add them
                 for i, stop in enumerate(stops):
                     if stop not in comprehensive_stops:
@@ -1090,7 +1094,7 @@ def create_feed_shapes_for_rail(feed_tables: Dict[str, pd.DataFrame]):
                     new_shapes_list.append(shape_point)
     
     if len(new_shapes_list) == 0:
-        WranglerLogger.info("No new shape points created for rail routes")
+        WranglerLogger.info("No new shape points created for STATION_ONLY_ROUTE_TYPES routes")
         return
     
     # Create DataFrame from new shapes
@@ -1103,16 +1107,16 @@ def create_feed_shapes_for_rail(feed_tables: Dict[str, pd.DataFrame]):
             # Project to original CRS if it was different
             new_shapes_df = new_shapes_df.to_crs(original_crs)
     
-    # Get list of rail shape_ids that we're replacing
-    rail_shape_ids = new_shapes_df['shape_id'].unique()
+    # Get list of STATION_ONLY_ROUTE_TYPES shape_ids that we're replacing
+    station_only_shape_ids = new_shapes_df['shape_id'].unique()
     
-    # Remove old shape points for rail routes
+    # Remove old shape points for station-only routes
     original_shape_count = len(feed_tables['shapes'])
     feed_tables['shapes'] = feed_tables['shapes'][
-        ~feed_tables['shapes']['shape_id'].isin(rail_shape_ids)
+        ~feed_tables['shapes']['shape_id'].isin(station_only_shape_ids)
     ]
     
-    # Add new rail shape points
+    # Add new station-only route points
     # Preserve column order and types from original shapes
     for col in feed_tables['shapes'].columns:
         if col not in new_shapes_df.columns:
@@ -1121,7 +1125,7 @@ def create_feed_shapes_for_rail(feed_tables: Dict[str, pd.DataFrame]):
     # Reorder columns to match original
     new_shapes_df = new_shapes_df[feed_tables['shapes'].columns]
     
-    WranglerLogger.debug("Before concatenating new rail shapes with non-rail shapes:")
+    WranglerLogger.debug("Before concatenating new STATION_ONLY_ROUTE_TYPES shapes with non-STATION_ONLY_ROUTE_TYPES shapes:")
     WranglerLogger.debug(f"feed_tables['shapes']:\n{feed_tables['shapes']}")
     WranglerLogger.debug(f"new_shapes_df:\n{new_shapes_df}")
 
@@ -1138,7 +1142,7 @@ def create_feed_shapes_for_rail(feed_tables: Dict[str, pd.DataFrame]):
     
     new_shape_count = len(feed_tables['shapes'])
     WranglerLogger.info(
-        f"Replaced shapes for {len(rail_shape_ids)} rail routes. "
+        f"Replaced shapes for {len(station_only_shape_ids)} STATION_ONLY_ROUTE_TYPES routes. "
         f"Shape points: {original_shape_count:,} -> {new_shape_count:,}"
     )
 
@@ -1164,18 +1168,18 @@ def create_feed_shapes(
     4. Project shapes and stops to local CRS for accurate distance calculations
     5. Match shape points to nearby stops where route_dir_ids overlap (reuse stop model_node_id)
     6. Build spatial index (BallTree) of roadway nodes with drive access
-    7. Find nearest roadway nodes for shape points that:
-       - Belong to MIXED_TRAFFIC_AND_STATION route types
-       - Don't already have model_node_id from stop matching
-    8. Filter out shape points too far from any node (beyond max_distance)
-    9. Assign shape_model_node_id combining both stop-matched and roadway-matched nodes
-    10. Validate that consecutive shape points correspond to actual roadway links
-    11. Raise TransitValidationError if invalid segments are found
+    7. Find nearest roadway nodes for shape points between non-station stops
+    8. Remove duplicate consecutive shape points with same model_node_id
+    9. Validate that consecutive shape points correspond to actual roadway links
+    10. For invalid segments, attempt to find paths through the roadway network
+    11. Create GeoDataFrames for both valid and invalid shape segments
+    12. Raise TransitValidationError if invalid segments remain after pathfinding
     
     After mapping shape points to roadway nodes, this function validates that consecutive
-    shape points correspond to actual links in the roadway network. If invalid segments
-    are found (segments where no roadway link exists between consecutive shape points),
-    a TransitValidationError is raised.
+    shape points correspond to actual links in the roadway network. For segments that don't
+    have direct links, it attempts to find paths through intermediate nodes. If invalid segments
+    remain (segments where no path exists between consecutive shape points), a TransitValidationError
+    is raised with both valid and invalid segments attached for debugging.
     
     Args:
         feed_tables: Current Feed tables, including shapes
@@ -1193,7 +1197,7 @@ def create_feed_shapes(
         TransitValidationError: If any shape segments don't correspond to roadway links. The exception contains:
 
             - exception_source: 'create_feed_shapes'
-            - invalid_shape_sequences_gdf: GeoDataFrame with LineString geometries of invalid segments
+            - shape_links_gdf: GeoDataFrame with LineString geometries of shape sequences
             - invalid_shape_ids: List of shape IDs that have invalid segments
     """
     if crs_units not in ["feet","meters"]:
@@ -1214,6 +1218,7 @@ def create_feed_shapes(
     from sklearn.neighbors import BallTree    
     WranglerLogger.info(f"Mapping {len(feed_tables['shapes']):,} shape points to all roadway nodes")
 
+    # Step 1: Convert shapes to GeoDataFrame if needed and add geometry from lat/lon coordinates
     # Create GeoDataFrame from shape points if not already one
     if not isinstance(feed_tables['shapes'], gpd.GeoDataFrame):
         shape_geometry = [
@@ -1225,7 +1230,7 @@ def create_feed_shapes(
     else:
         WranglerLogger.debug(f"feed_tables['shapes'].crs={feed_tables['shapes'].crs}")
 
-    # Add agency, route, and trip information to shapes by joining with trips and routes
+    # Step 2: Add agency, route, and trip information to shapes by joining with trips and routes tables
     # Get unique shape_ids to trips mapping
     shape_to_trips = feed_tables['trips'][['shape_id', 'trip_id', 'direction_id', 'route_id']].drop_duplicates()
     
@@ -1235,7 +1240,7 @@ def create_feed_shapes(
         'route_id': lambda x: list(x.unique())
     }).reset_index()
     
-    # Add route_dir_ids as list of unique (route_id, direction_id) tuples
+    # Step 3: Create route_dir_ids column containing (route_id, direction_id) tuples for each shape
     route_dir_info = shape_to_trips.groupby('shape_id').apply(
         lambda x: list(x[['route_id', 'direction_id']].drop_duplicates().itertuples(index=False, name=None))
     ).reset_index()
@@ -1311,9 +1316,8 @@ def create_feed_shapes(
             how='left'
         )
 
-    # Special handling for rail routes (route_type == 2)
-    # create_feed_shapes_for_rail(feed_tables)
-    # Special handling for ferry routes (route_type == 4)
+    # Special handling for STATION_ONLY_ROUTE_TYPES
+    create_feed_shapes_for_station_only_route_types(feed_tables)
 
     # For each trip and stop in that trip, find the nearest shape point and update it with stop info
     # This uses a vectorized approach for better performance
@@ -1351,6 +1355,7 @@ def create_feed_shapes(
     )
     WranglerLogger.debug(f"stop_shape_df.head():\n{stop_shape_df.head()}")
 
+    # Step 6: Build spatial index (BallTree) of roadway nodes with drive access
     # Build BallTree for drive-access nodes that are actually in the drive graph
     # This ensures we only match to connected nodes
     G_drive = roadway_net.get_modal_graph('drive')
@@ -1369,9 +1374,10 @@ def create_feed_shapes(
     WranglerLogger.debug(f"Created BallTree for drive_nodes_tree with {len(drive_node_coords):,} nodes (from {len(drive_graph_nodes):,} nodes in drive graph)")
 
     # Group by shape_id for batch processing
-    # Omit RAIL because it was handled by create_feed_shapes_for_rail()
+    # Omit RAIL because it was handled by create_feed_shapes_for_station_only_route_types()
     # unique_shape_ids = stop_shape_df.loc[stop_shape_df.route_type != RouteType.RAIL]['shape_id'].unique()
     
+    # Step 5: Match shape points to nearby stops where route_dir_ids overlap (reuse stop model_node_id)
     # On second thought, let's do this for all modes
     unique_shape_ids = sorted(stop_shape_df['shape_id'].unique())
     WranglerLogger.info(f"Processing {len(unique_shape_ids):,} unique shape_ids")
@@ -1431,13 +1437,18 @@ def create_feed_shapes(
             if distance < feed_tables['shapes'].loc[shape_global_idx, f'match_distance_{crs_units}']:
                 stop_info = feed_tables['stops'][feed_tables['stops']['stop_id'] == stop_id].iloc[0]
                 stop_seq = unique_stop_info[unique_stop_info['stop_id'] == stop_id]['stop_sequence'].iloc[0]
-                
+
                 feed_tables['shapes'].loc[shape_global_idx, 'shape_model_node_id'] = stop_id
                 feed_tables['shapes'].loc[shape_global_idx, f'match_distance_{crs_units}'] = distance
                 feed_tables['shapes'].loc[shape_global_idx, 'stop_id'] = stop_id
                 feed_tables['shapes'].loc[shape_global_idx, 'stop_name'] = stop_info.get('stop_name', '')
                 feed_tables['shapes'].loc[shape_global_idx, 'stop_sequence'] = stop_seq
                 feed_tables['shapes'].loc[shape_global_idx, 'station_sequence'] = stop_info.get('station_sequence')
+
+                # update location to stop location
+                feed_tables['shapes'].loc[shape_global_idx, 'shape_pt_lon'] = stop_info.get('stop_lon')
+                feed_tables['shapes'].loc[shape_global_idx, 'shape_pt_lat'] = stop_info.get('stop_lat')
+                feed_tables['shapes'].loc[shape_global_idx, 'geometry'] = stop_info.get('geometry')
                 matched_count += 1
 
 
@@ -1458,6 +1469,7 @@ def create_feed_shapes(
             WranglerLogger.debug(f"\n{shape_df.loc[pd.notna(shape_df['stop_id']), debug_cols]}")
 
     
+    # Step 7: Find nearest roadway nodes for shape points between non-station stops
     # Vectorized approach to find shape points between non-station stops that need drive node matching
     WranglerLogger.info("Finding shape points between non-station stops for drive node matching")
     
@@ -1514,12 +1526,20 @@ def create_feed_shapes(
             valid_node_indices = indices[valid_matches]
             valid_distances = distances[valid_matches]
             
-            # Get the drive node IDs
+            # Get the drive node IDs and geometries
             drive_node_ids = drive_gdf_proj.iloc[valid_node_indices]['model_node_id'].values
+            drive_node_geoms = drive_gdf_proj.iloc[valid_node_indices]['geometry'].values
+            
+            # Convert drive node geometries back to WGS84 for lat/lon
+            drive_nodes_wgs84 = gpd.GeoSeries(drive_node_geoms, crs=local_crs).to_crs(WGS84)
             
             # Update feed_tables['shapes'] with the matched drive nodes
             feed_tables['shapes'].loc[valid_idx, 'shape_model_node_id'] = drive_node_ids
             feed_tables['shapes'].loc[valid_idx, f'match_distance_{crs_units}'] = valid_distances
+            # Update the location to the location of the drive nodes
+            feed_tables['shapes'].loc[valid_idx, 'shape_pt_lat'] = [geom.y for geom in drive_nodes_wgs84]
+            feed_tables['shapes'].loc[valid_idx, 'shape_pt_lon'] = [geom.x for geom in drive_nodes_wgs84]
+            feed_tables['shapes'].loc[valid_idx, 'geometry'] = drive_nodes_wgs84.values
             
             WranglerLogger.info(f"Matched {len(valid_idx):,} shape points to drive nodes (within {max_distance} {crs_units})")
     
@@ -1528,6 +1548,7 @@ def create_feed_shapes(
     removed_count = feed_tables['shapes']['shape_model_node_id'].isna().sum()
     WranglerLogger.info(f"Shape point mapping complete: matched {kept_count:,} of {kept_count + removed_count:,} points")
 
+    # Step 8: Remove duplicate consecutive shape points with same model_node_id
     # Delete rows with shape_model_node_id.isna()
     WranglerLogger.debug(f"Before removing rows with shape_model_node_id.isna(), {len(feed_tables['shapes'])=:,}")
     feed_tables['shapes'] = feed_tables['shapes'].loc[feed_tables['shapes']['shape_model_node_id'].notna()]
@@ -1608,6 +1629,7 @@ def create_feed_shapes(
             WranglerLogger.debug(f"\n{shape_df[debug_cols]}")
 
 
+    # Step 9: Validate that consecutive shape points correspond to actual roadway links
     # For each shape_id, when sorted by shape_pt_sequence, each consecutive pair of nodes in feed_tables['shapes']
     # needs to correspond to a link in roadway_net.links_df.
 
@@ -1651,18 +1673,14 @@ def create_feed_shapes(
     WranglerLogger.debug(f"shape_links_df._merge.value_counts():\n{shape_links_df._merge.value_counts()}")
     
     # Find invalid segments (where _merge is left_only)
-    invalid_shape_sequences_gdf= shape_links_df[shape_links_df['_merge']=="left_only"]
-    WranglerLogger.debug(f"invalid_shape_sequences_gdf.head():\n{invalid_shape_sequences_gdf.head()}")
-    WranglerLogger.debug(f"{len(invalid_shape_sequences_gdf)=}")
+    invalid_shape_links_gdf= shape_links_df[shape_links_df['_merge']=="left_only"]
+    WranglerLogger.debug(f"invalid_shape_links_gdf.head():\n{invalid_shape_links_gdf.head()}")
+    WranglerLogger.debug(f"{len(invalid_shape_links_gdf)=}")
 
-    # TEMP TEST
-    # invalid_shape_sequences_gdf = invalid_shape_sequences_gdf.loc[invalid_shape_sequences_gdf.shape_id.isin(random_shape_ids)]
-    # WranglerLogger.debug(f"invalid_shape_sequences_gdf.head():\n{invalid_shape_sequences_gdf.head()}")
-    # WranglerLogger.debug(f"{len(invalid_shape_sequences_gdf)=}")
-
+    # Step 10: For invalid segments, attempt to find paths through the roadway network
     # For links that don't match, try to find a path from A to B through intermediate nodes
     
-    if len(invalid_shape_sequences_gdf) > 0:
+    if len(invalid_shape_links_gdf) > 0:
         
         # Use the drive graph we already created for pathfinding
         # (G_drive was created earlier when building the BallTree)
@@ -1684,7 +1702,7 @@ def create_feed_shapes(
         still_invalid_segments = []
         new_shape_points = []  # New points to add to feed_tables['shapes']
         
-        for idx, row in invalid_shape_sequences_gdf.iterrows():
+        for idx, row in invalid_shape_links_gdf.iterrows():
             node_a = row['A']
             node_b = row['B']
             
@@ -1784,28 +1802,19 @@ def create_feed_shapes(
                 f"(found indirect routes through transit network)"
             )
         
-        # Update invalid_shape_sequences_gdf to only include segments that couldn't be resolved
-        invalid_shape_sequences_gdf = invalid_shape_sequences_gdf.loc[still_invalid_segments]
+        # Update invalid_shape_links_gdf to only include segments that couldn't be resolved
+        invalid_shape_links_gdf = invalid_shape_links_gdf.loc[still_invalid_segments]
     
     # revert to previous setting        
     pd.options.display.min_rows = min_rows
 
-    if len(invalid_shape_sequences_gdf) > 0:
+    if len(invalid_shape_links_gdf) > 0:
+        # Step 11: Create GeoDataFrames for both valid and invalid shape segments
         # Convert invalid segments to 2-Point LineString geodataframe
-
-        # remove lines with the two points having the same location
-        # TODO: Fix this upstream?
-        same_points_gdf = invalid_shape_sequences_gdf.loc[ 
-            (invalid_shape_sequences_gdf.shape_pt_lon==invalid_shape_sequences_gdf.next_pt_lon) &
-            (invalid_shape_sequences_gdf.shape_pt_lat==invalid_shape_sequences_gdf.next_pt_lat)]
-        WranglerLogger.debug(f"Removing lines with A location == B location:\n{same_points_gdf}")
-        invalid_shape_sequences_gdf = invalid_shape_sequences_gdf.loc[
-            (invalid_shape_sequences_gdf.shape_pt_lon != invalid_shape_sequences_gdf.next_pt_lon) |
-            (invalid_shape_sequences_gdf.shape_pt_lat != invalid_shape_sequences_gdf.next_pt_lat)]
 
         # Create LineStrings from start and end points
         segment_lines = []
-        for _, row in invalid_shape_sequences_gdf.iterrows():
+        for _, row in invalid_shape_links_gdf.iterrows():
             line = shapely.geometry.LineString([
                 (row['shape_pt_lon'], row['shape_pt_lat']),
                 (row['next_pt_lon'], row['next_pt_lat'])
@@ -1815,29 +1824,70 @@ def create_feed_shapes(
         # Create GeoDataFrame with invalid segments
         shape_links_cols.remove('geometry')
         WranglerLogger.debug(f"shape_links_cols={shape_links_cols}")
-        invalid_shape_sequences_gdf = gpd.GeoDataFrame(
-            invalid_shape_sequences_gdf[shape_links_cols],
+        invalid_shape_links_gdf = gpd.GeoDataFrame(
+            invalid_shape_links_gdf[shape_links_cols],
             geometry=segment_lines,
             crs=WGS84
         )
-        WranglerLogger.debug(f"invalid_shape_sequences_gdf=\n{invalid_shape_sequences_gdf}")
+        WranglerLogger.debug(f"invalid_shape_links_gdf=\n{invalid_shape_links_gdf}")
+        
+        # Add the valid links between shape points that correspond to roadway links
+        # Get valid segments (where _merge is 'both')
+        valid_shape_links_df = shape_links_df[shape_links_df['_merge'] == 'both'].copy()
+        
+        if len(valid_shape_links_df) > 0:
+            # Create LineStrings for valid segments too
+            valid_segment_lines = []
+            for _, row in valid_shape_links_df.iterrows():
+                line = shapely.geometry.LineString([
+                    (row['shape_pt_lon'], row['shape_pt_lat']),
+                    (row['next_pt_lon'], row['next_pt_lat'])
+                ])
+                valid_segment_lines.append(line)
+            
+            # Create GeoDataFrame with valid segments
+            valid_shape_links_gdf = gpd.GeoDataFrame(
+                valid_shape_links_df[shape_links_cols],
+                geometry=valid_segment_lines,
+                crs=WGS84
+            )
+            WranglerLogger.info(f"Found {len(valid_shape_links_gdf):,} valid shape segments that correspond to roadway links")
+        else:
+            valid_shape_links_gdf = None
         
         # Get unique shape IDs with invalid segments
-        invalid_shape_ids = invalid_shape_sequences_gdf['shape_id'].unique()
+        invalid_shape_ids = invalid_shape_links_gdf['shape_id'].unique()
         
+        # Step 12: Raise TransitValidationError if invalid segments remain after pathfinding
         # Create error message
         error_msg = (
-            f"Found {len(invalid_shape_ids):,} shape(s) with {len(invalid_shape_sequences_gdf):,} invalid segment(s) "
+            f"Found {len(invalid_shape_ids):,} shape(s) with {len(invalid_shape_links_gdf):,} invalid segment(s) "
             f"that don't correspond to roadway links.\n"
             f"Invalid shapes: {list(invalid_shape_ids[:10])}"
             f"{'...' if len(invalid_shape_ids) > 10 else ''}\n"
             f"These segments need corresponding links in the roadway network."
         )
         
+        valid_shape_links_gdf['valid'] = True
+        invalid_shape_links_gdf['valid'] = False
+        shape_links_gdf = pd.concat([valid_shape_links_gdf, invalid_shape_links_gdf])
+        
+        # remove lines with the two points having the same location
+        # TODO: Fix this upstream?
+        same_points_gdf = shape_links_gdf.loc[ 
+            (shape_links_gdf.shape_pt_lon==shape_links_gdf.next_pt_lon) &
+            (shape_links_gdf.shape_pt_lat==shape_links_gdf.next_pt_lat)]
+        WranglerLogger.debug(f"Removing lines with A location == B location:\n{same_points_gdf}")
+        shape_links_gdf = shape_links_gdf.loc[
+            (shape_links_gdf.shape_pt_lon != shape_links_gdf.next_pt_lon) |
+            (shape_links_gdf.shape_pt_lat != shape_links_gdf.next_pt_lat)]
+
+        WranglerLogger.debug(f"shape_links_gdf.valid.value_counts(dropna=False):\n{shape_links_gdf.valid.value_counts(dropna=False)}")
+
         # Raise exception with the invalid segments GeoDataFrame attached
         exception = TransitValidationError(error_msg)
         exception.exception_source = "create_feed_shapes"
-        exception.invalid_shape_sequences_gdf = invalid_shape_sequences_gdf
+        exception.shape_links_gdf = shape_links_gdf
         exception.invalid_shape_ids = list(invalid_shape_ids)
         raise exception
 
