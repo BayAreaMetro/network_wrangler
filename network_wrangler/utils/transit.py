@@ -2,6 +2,7 @@
 
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 from pathlib import Path
+import pprint
 
 import geopandas as gpd
 import numpy as np
@@ -20,6 +21,7 @@ from ..roadway.network import RoadwayNetwork
 from ..transit.feed.feed import Feed
 from ..errors import NodeNotFoundError, TransitValidationError
 from .time import time_to_seconds
+from ..params import LAT_LON_CRS
 
 MIXED_TRAFFIC_ROUTE_TYPES = [
     RouteType.TRAM, 
@@ -92,8 +94,6 @@ MAX_DISTANCE_SHAPE = {
 This is much smaller because shape nodes will often be mid-block and we don't need to keep all of those.
 """
 
-WGS84 = "EPSG:4326"
-"""WGS84 longitude/latitude coordinate system."""
 
 def create_frequencies_from_stop_times(
     feed_tables: Dict[str, pd.DataFrame],
@@ -384,7 +384,7 @@ def match_stops_with_connectivity_for_station_sequence(
     transit_graph: Dict[int, set],
     stops_gdf_proj: gpd.GeoDataFrame,
     max_distance: float
-) -> Dict[str, int]:
+):
     """Match stops for a station sequence in a route to roadway nodes considering transit link connectivity.
     
     This function attempts to match transit stops to roadway nodes while preserving
@@ -398,7 +398,8 @@ def match_stops_with_connectivity_for_station_sequence(
     3. For subsequent stops, only consider candidates that are connected to the 
        previous stop's matched node via the transit_graph
     4. Choose the closest connected candidate for each stop
-    5. If a fully connected path is found, return those matches
+    5. If a fully connected path is found, update stops_gdf_proj for those stops
+       by setting model_node_id, station_sequence, match_distance_{crs_units}
     6. If no fully connected path exists, raise a TransitValidationError
     
     This ensures that the matched nodes form a connected path through the transit
@@ -420,33 +421,21 @@ def match_stops_with_connectivity_for_station_sequence(
             - geometry: Point geometries in same projected CRS as candidate_nodes_gdf
         max_distance: Maximum allowed distance from stop to node in crs_units
         
-    Returns:
-        Dict mapping stop_id to matched model_node_id
-        
     Raises:
         TransitValidationError: If no fully connected path can be found through
             the stops using the available transit links
-    
-    Example:
-        >>> transit_graph = {1: {1, 2}, 2: {2, 3}, 3: {3, 4}}
-        >>> matches = match_stops_with_connectivity_for_station_sequence(
-        ...     route_stops_df, nodes_gdf, 'feet', transit_graph, stops_gdf, 500
-        ... )
-        >>> print("All stops matched with connectivity preserved")
     """
     # WranglerLogger.debug(f"==== match_stops_with_connectivity_for_station_sequence() ===")
     # WranglerLogger.debug(f"route_stops_df:\n{route_stops_df}")
     if crs_units not in ["feet","meters"]:
         raise ValueError(f"crs_units must be on of 'feet' or 'meters'; received {crs_units}")
-
-    stop_matches = {}
     
     # Get ordered list of stops with names
     ordered_stops_df = route_stops_df.sort_values('stop_sequence')
     ordered_stops = ordered_stops_df['stop_id'].tolist()
     
     if len(ordered_stops) == 0:
-        return stop_matches
+        return
     
     # Get stop names for logging
     stop_info = {}
@@ -469,13 +458,13 @@ def match_stops_with_connectivity_for_station_sequence(
     # Try to find a connected path through the candidates
     # Start with the first stop and try each candidate
     first_stop = ordered_stops[0]
-    best_match_count = 0
-    best_matches = None
     
     WranglerLogger.debug(f"  First stop candidates: {stop_candidates.get(first_stop, [])}")
     fail_log_lines = []    # keep log lines for failure
+    fail_log_seq_len = 0
     for first_node in stop_candidates.get(first_stop, []):
         matches = {first_stop: first_node}
+        current_stop_id = first_stop
         current_node = first_node
         current_log_lines = [] # keep log lines for current iteration
         
@@ -502,8 +491,12 @@ def match_stops_with_connectivity_for_station_sequence(
                                   candidate_nodes_gdf[candidate_nodes_gdf['model_node_id'] == n].geometry.iloc[0]
                               ))
                 matches[stop_id] = best_node
-                current_node = best_node
                 current_log_lines.append(f"      [OK]   [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) -> Node {best_node}")
+                # Note: it shouldn't be the same as the previous node...
+                if (best_node == current_node) and (stop_id != current_stop_id):
+                    WranglerLogger.warning(f"Two different consecutive stops are mapping to the same node: {best_node}")
+                current_stop_id = stop_id
+                current_node = best_node
             else:
                 # No connected candidate found
                 success = False
@@ -513,58 +506,51 @@ def match_stops_with_connectivity_for_station_sequence(
                     reason = f"{len(candidates)} candidates ({candidates}) but none connected from node {current_node}"
                 current_log_lines.append(f"      [FAIL] [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) - {reason}")
 
-                # move current log_lines to failure
-                fail_log_lines.extend(current_log_lines)
+                # move current log_lines to failure, if it's a longer sequence than we've seen before
+                if len(current_log_lines) > fail_log_seq_len:
+                    fail_log_lines = current_log_lines # discard previous
+                    fail_log_seq_len = len(current_log_lines)
+                elif len(current_log_lines) == fail_log_seq_len:
+                    fail_log_lines.extend(current_log_lines) # keep in addition to previous
+                    fail_log_seq_len = len(current_log_lines)
                 current_log_lines = [] # start fresh
                 break
         
         if success:
             for log_line in current_log_lines: WranglerLogger.debug(log_line)
             WranglerLogger.debug(f"      [SUCCESS] Matched all {len(matches)} stops using connectivity: matches={matches}")
-            return matches
-        
-        # Track best attempt (most stops matched)
-        if len(matches) > best_match_count:
-            best_match_count = len(matches)
-            best_matches = matches
+
+            # Apply matches by updating stop_gdf_proj in place
+            for stop_id, node_id in matches.items():
+                if stop_id not in stops_gdf_proj['stop_id'].values: raise Exception("This shouldn't happen")
+
+                stop_idx = stops_gdf_proj[stops_gdf_proj['stop_id'] == stop_id].index[0]
+                stops_gdf_proj.loc[stop_idx, 'model_node_id'] = node_id
+                # note that it's part of a station sequence
+                stops_gdf_proj.loc[stop_idx, 'station_sequence'] = True
+                        
+                candidate_node = candidate_nodes_gdf[candidate_nodes_gdf['model_node_id'] == node_id].iloc[0]
+
+                # Calculate distance
+                stop_geom = stops_gdf_proj.loc[stop_idx, 'geometry']
+                distance = stop_geom.distance(candidate_node['geometry'])
+                stops_gdf_proj.loc[stop_idx, f'match_distance_{crs_units}'] = distance
+
+                # Update the stop location to match the node
+                stops_gdf_proj.loc[stop_idx, 'stop_lon'] = candidate_node['X']
+                stops_gdf_proj.loc[stop_idx, 'stop_lat'] = candidate_node['Y']
+                stops_gdf_proj.loc[stop_idx, 'geometry'] = candidate_node['geometry']
+
+            return
     
     # If no connected path found, raise an exception and log all of the failures
     for log_line in fail_log_lines: WranglerLogger.debug(log_line)
     WranglerLogger.error(f"      Connectivity failed - no fully connected path found")
-
     
-    # Build detailed error message
-    error_details = []
-    
-    # If we had no candidates for first stop, report that
-    if len(stop_candidates.get(first_stop, [])) == 0:
-        error_details.append(f"First stop {stop_info[first_stop]} ({first_stop}) has no nodes within {max_distance} {crs_units}")
-    else:
-        error_details.append(f"Could not find connected path through stops")
-    
-    # Report the best partial match if we found one
-    if best_matches:
-        matched_stops = [stop_info.get(s, s) for s in best_matches.keys()]
-        error_details.append(f"Best partial match: {len(best_matches)}/{len(ordered_stops)} stops matched: {matched_stops}")
-    
-    # List all stops that couldn't be matched
-    unmatched_stops = []
-    for stop_id in ordered_stops:
-        if not best_matches or stop_id not in best_matches:
-            candidates = stop_candidates.get(stop_id, [])
-            if len(candidates) == 0:
-                unmatched_stops.append(f"{stop_info[stop_id]} ({stop_id}): no nodes within {max_distance} {crs_units}")
-            else:
-                unmatched_stops.append(f"{stop_info[stop_id]} ({stop_id}): {len(candidates)} candidates but none connected")
-    
-    if unmatched_stops:
-        error_details.append(f"Unmatched stops: {unmatched_stops}")
-    
-    error_msg = f"Failed to match route stops with connectivity. " + "; ".join(error_details)
+    error_msg = f"Failed to match route stops with connectivity. "
     exception = TransitValidationError(error_msg)
     exception.exception_source = "match_stops_with_connectivity_for_station_sequence"
     raise TransitValidationError(error_msg)
-
 
 def match_stops_with_connectivity_for_stations(
     gtfs_model: GtfsModel,
@@ -601,20 +587,25 @@ def match_stops_with_connectivity_for_stations(
         This function modifies stops_gdf_proj in place, setting model_node_id and 
         match_distance_{crs_units} for matched stops.
     """
-    WranglerLogger.info("match_stops_with_connectivity_for_stations(): " + \
-                        " Processing routes for connectivity-aware matching of station sequences")
+    WranglerLogger.info(
+        "match_stops_with_connectivity_for_stations(): "
+        "Processing routes for connectivity-aware matching of station sequences"
+    )
 
     if crs_units not in ["feet","meters"]:
         raise ValueError(f"crs_units must be on of 'feet' or 'meters'; received {crs_units}")
 
     # Get all route + direction combinations from trips
     route_direction_combinations = gtfs_model.trips[['route_id', 'direction_id']].drop_duplicates()
+    route_id_to_type = gtfs_model.routes[['route_id','route_type']].set_index('route_id').to_dict(orient='dict')['route_type']
+    # WranglerLogger.debug(f"route_id_to_type:{pprint.pformat(route_id_to_type)}")
     
     if len(route_direction_combinations) == 0:
         return 0
         
     WranglerLogger.info(f"Analyzing {len(route_direction_combinations)} route+direction combinations for station stop sequences")
-    
+    WranglerLogger.debug(f"stops_gdf_proj.head()\n{stops_gdf_proj.head()}")
+
     # Process each route+direction to find sequences of station stops
     failed_connectivity_sequences = []
     total_sequences_processed = 0
@@ -625,7 +616,12 @@ def match_stops_with_connectivity_for_stations(
     for _, row in route_direction_combinations.iterrows():
         route_id = row['route_id']
         direction_id = row['direction_id']
-        
+
+        # Get route info
+        route_info = gtfs_model.routes[gtfs_model.routes['route_id'] == route_id].iloc[0]
+        route_name = route_info.get('route_short_name', route_id)
+        agency_id = route_info.get('agency_id', 'N/A')
+                
         # Get trips for this route and direction
         route_dir_trips = gtfs_model.trips[
             (gtfs_model.trips['route_id'] == route_id) & 
@@ -657,21 +653,50 @@ def match_stops_with_connectivity_for_stations(
         if len(route_stops) == 0:
             continue
         
+        # for route_type in STATION_ROUTE_TYPES, try the full route
+        if route_id_to_type[route_id] in STATION_ROUTE_TYPES:
+            # First try the entire line
+            # If that doesn't work, find sequences of consecutive stations
+            sequence_df = route_stops[['stop_id','stop_sequence']]
+            # Try to match stops with connectivity
+            try:
+                WranglerLogger.debug(f"  Processing full sequence for route {route_name} ({route_id}) direction {direction_id}")
+                WranglerLogger.debug(f"  Agency: {agency_id}, Route ID: {route_id}, Direction: {direction_id}, Route Name: {route_name}")
+                WranglerLogger.debug(f"  Full Sequence has {len(sequence_df)} stops")
+
+                match_stops_with_connectivity_for_station_sequence(
+                    route_stops_df=sequence_df,
+                    candidate_nodes_gdf=transit_nodes_gdf_proj,
+                    crs_units=crs_units,
+                    transit_graph=transit_graph,
+                    stops_gdf_proj=stops_gdf_proj,
+                    max_distance=max_distance,
+                )
+                WranglerLogger.info(f"SUCCESS for FULL ROUTE {route_id} direction={direction_id}")
+                debug_df = pd.merge(sequence_df, stops_gdf_proj, on='stop_id', how='left')
+                debug_cols = ['stop_id','stop_name','stop_lat','stop_lon','model_node_id','station_sequence',f'match_distance_{crs_units}']
+                WranglerLogger.debug(f"\n{debug_df[debug_cols]}")
+                # move on to the next route
+                continue
+            except TransitValidationError as e:
+                WranglerLogger.info(f"FAILURE for FULL ROUTE {route_id} direction={direction_id}")
+                # find partial sequences
+
         # Find sequences of consecutive stations (non-mixed-traffic stops)
         # First, we need to know which stops are in mixed traffic
         route_stop_ids = route_stops['stop_id'].tolist()
         stop_traffic_info = stops_gdf_proj[stops_gdf_proj['stop_id'].isin(route_stop_ids)][
             ['stop_id', 'stop_in_mixed_traffic']
         ].set_index('stop_id')['stop_in_mixed_traffic'].to_dict()
-        
+    
         # Find sequences of stations (non-mixed-traffic stops)
         sequences = []
         current_sequence = []
-        
+    
         for _, stop_row in route_stops.iterrows():
             stop_id = stop_row['stop_id']
             is_mixed_traffic = stop_traffic_info.get(stop_id, True)  # Default to True if not found
-            
+        
             if not is_mixed_traffic:
                 current_sequence.append(stop_row)
             else:
@@ -679,27 +704,23 @@ def match_stops_with_connectivity_for_stations(
                 if len(current_sequence) >= 2:  # Only process sequences of 2+ stops
                     sequences.append(pd.DataFrame(current_sequence))
                 current_sequence = []
-        
+    
         # Don't forget the last sequence
         if len(current_sequence) >= 2:
             sequences.append(pd.DataFrame(current_sequence))
-        
+    
         # Process each sequence with connectivity matching
         for seq_idx, sequence_df in enumerate(sequences):
             total_sequences_processed += 1
-            
-            # Get route info
-            route_info = gtfs_model.routes[gtfs_model.routes['route_id'] == route_id].iloc[0]
-            route_name = route_info.get('route_short_name', route_id)
-            agency_id = route_info.get('agency_id', 'N/A')
-            
-            WranglerLogger.debug(f"  Processing sequence {seq_idx + 1} of {len(sequences)} for route {route_name} ({route_id}) direction {direction_id}")
+        
+            WranglerLogger.debug(f"  Processing partial sequence {seq_idx + 1} of {len(sequences)} for route {route_name} ({route_id}) direction {direction_id}")
             WranglerLogger.debug(f"  Agency: {agency_id}, Route ID: {route_id}, Direction: {direction_id}, Route Name: {route_name}")
-            WranglerLogger.debug(f"  Sequence has {len(sequence_df)} stations")
-            
+            WranglerLogger.debug(f"  Partial sequence has {len(sequence_df)} stations")
+            WranglerLogger.debug(f"  sequence_df:\n{sequence_df}")
+        
             # Try to match stops with connectivity
             try:
-                stop_matches = match_stops_with_connectivity_for_station_sequence(
+                match_stops_with_connectivity_for_station_sequence(
                     sequence_df,
                     transit_nodes_gdf_proj,
                     crs_units,
@@ -707,25 +728,8 @@ def match_stops_with_connectivity_for_stations(
                     stops_gdf_proj,
                     max_distance,
                 )
-                
-                # Apply matches
-                for stop_id, node_id in stop_matches.items():
-                    if stop_id in stops_gdf_proj['stop_id'].values:
-                        stop_idx = stops_gdf_proj[stops_gdf_proj['stop_id'] == stop_id].index[0]
-                        stops_gdf_proj.loc[stop_idx, 'model_node_id'] = node_id
-                        # note that it's part of a station sequence
-                        stops_gdf_proj.loc[stop_idx, 'station_sequence'] = True
-                        
-                        # Calculate distance
-                        stop_geom = stops_gdf_proj.loc[stop_idx, 'geometry']
-                        node_geom = transit_nodes_gdf_proj[
-                            transit_nodes_gdf_proj['model_node_id'] == node_id
-                        ].geometry.iloc[0]
-                        distance = stop_geom.distance(node_geom)
-                        stops_gdf_proj.loc[stop_idx, f'match_distance_{crs_units}'] = distance
-                        
-                        connectivity_matched_count += 1
-                        
+                connectivity_matched_count += 1
+
             except TransitValidationError as e:
                 # Track failed sequence with error details
                 # Get stop names for better error reporting
@@ -738,7 +742,7 @@ def match_stops_with_connectivity_for_stations(
                         stop_names.append(f"{stop_name} ({stop_id})")
                     else:
                         stop_names.append(stop_id)
-                
+            
                 failed_connectivity_sequences.append({
                     'agency_id': agency_id,
                     'route_id': route_id,
@@ -749,7 +753,7 @@ def match_stops_with_connectivity_for_stations(
                     'stops': stop_names,
                     'error': str(e)
                 })
-    
+                           
     WranglerLogger.info(f"Processed {total_sequences_processed} station sequences across all route+direction combinations")
     
     # Log summary of failed connectivity sequences
@@ -804,7 +808,7 @@ def match_stops_for_mixed_traffic(
         roadway_net.nodes_df = gpd.GeoDataFrame(
             roadway_net.nodes_df, 
             geometry=gpd.points_from_xy(roadway_net.nodes_df.X, roadway_net.nodes_df.Y),
-            crs=WGS84
+            crs=LAT_LON_CRS
         )
     
     # Extract drive-accessible nodes
@@ -945,13 +949,13 @@ def create_feed_shapes_for_station_only_route_types(
         WranglerLogger.debug("No STATION_ONLY_ROUTE_TYPES routes found")
         return
     
-    WranglerLogger.info(f"Found {len(station_only_routes)} station-only routes to process")
+    WranglerLogger.info(f"Found {len(station_only_routes)} station-only routes to process ({STATION_ONLY_ROUTE_TYPES})")
     
     # Get all trips for rail routes
     station_only_trips = feed_tables['trips'][feed_tables['trips']['route_id'].isin(station_only_routes)]
     
     if len(station_only_trips) == 0:
-        WranglerLogger.warning("No trips found for rail routes")
+        WranglerLogger.warning("No trips found for STATION_ONLY_ROUTE_TYPES routes")
         return
     
     # Get all stop_times for rail trips
@@ -1146,8 +1150,8 @@ def create_feed_shapes_for_station_only_route_types(
     
     # Convert to GeoDataFrame if original was GeoDataFrame
     if is_geodf:
-        new_shapes_df = gpd.GeoDataFrame(new_shapes_df, geometry='geometry', crs=WGS84)
-        if original_crs is not None and original_crs != WGS84:
+        new_shapes_df = gpd.GeoDataFrame(new_shapes_df, geometry='geometry', crs=LAT_LON_CRS)
+        if original_crs is not None and original_crs != LAT_LON_CRS:
             # Project to original CRS if it was different
             new_shapes_df = new_shapes_df.to_crs(original_crs)
     
@@ -1273,7 +1277,7 @@ def create_feed_shapes(
             shapely.geometry.Point(lon, lat) for lon, lat in \
                 zip(feed_tables['shapes']["shape_pt_lon"], feed_tables['shapes']["shape_pt_lat"])
         ]
-        feed_tables['shapes'] = gpd.GeoDataFrame(feed_tables['shapes'], geometry=shape_geometry, crs=WGS84)
+        feed_tables['shapes'] = gpd.GeoDataFrame(feed_tables['shapes'], geometry=shape_geometry, crs=LAT_LON_CRS)
         WranglerLogger.debug(f"Converted feed_tables['shapes'] to GeoDataFrame")
     else:
         WranglerLogger.debug(f"feed_tables['shapes'].crs={feed_tables['shapes'].crs}")
@@ -1579,16 +1583,16 @@ def create_feed_shapes(
             drive_node_ids = drive_gdf_proj.iloc[valid_node_indices]['model_node_id'].values
             drive_node_geoms = drive_gdf_proj.iloc[valid_node_indices]['geometry'].values
             
-            # Convert drive node geometries back to WGS84 for lat/lon
-            drive_nodes_wgs84 = gpd.GeoSeries(drive_node_geoms, crs=local_crs).to_crs(WGS84)
+            # Convert drive node geometries back to LAT_LON_CRS for lat/lon
+            drive_nodes_LAT_LON_CRS = gpd.GeoSeries(drive_node_geoms, crs=local_crs).to_crs(LAT_LON_CRS)
             
             # Update feed_tables['shapes'] with the matched drive nodes
             feed_tables['shapes'].loc[valid_idx, 'shape_model_node_id'] = drive_node_ids
             feed_tables['shapes'].loc[valid_idx, f'match_distance_{crs_units}'] = valid_distances
             # Update the location to the location of the drive nodes
-            feed_tables['shapes'].loc[valid_idx, 'shape_pt_lat'] = [geom.y for geom in drive_nodes_wgs84]
-            feed_tables['shapes'].loc[valid_idx, 'shape_pt_lon'] = [geom.x for geom in drive_nodes_wgs84]
-            feed_tables['shapes'].loc[valid_idx, 'geometry'] = drive_nodes_wgs84.values
+            feed_tables['shapes'].loc[valid_idx, 'shape_pt_lat'] = [geom.y for geom in drive_nodes_LAT_LON_CRS]
+            feed_tables['shapes'].loc[valid_idx, 'shape_pt_lon'] = [geom.x for geom in drive_nodes_LAT_LON_CRS]
+            feed_tables['shapes'].loc[valid_idx, 'geometry'] = drive_nodes_LAT_LON_CRS.values
             
             WranglerLogger.info(f"Matched {len(valid_idx):,} shape points to drive nodes (within {max_distance} {crs_units})")
     
@@ -1874,7 +1878,7 @@ def create_feed_shapes(
         invalid_shape_links_gdf = gpd.GeoDataFrame(
             invalid_shape_links_gdf[shape_links_cols],
             geometry=segment_lines,
-            crs=WGS84
+            crs=LAT_LON_CRS
         )
         WranglerLogger.debug(f"invalid_shape_links_gdf=\n{invalid_shape_links_gdf}")
         
@@ -1896,7 +1900,7 @@ def create_feed_shapes(
             valid_shape_links_gdf = gpd.GeoDataFrame(
                 valid_shape_links_df[shape_links_cols],
                 geometry=valid_segment_lines,
-                crs=WGS84
+                crs=LAT_LON_CRS
             )
             WranglerLogger.info(f"Found {len(valid_shape_links_gdf):,} valid shape segments that correspond to roadway links")
         else:
@@ -1938,8 +1942,8 @@ def create_feed_shapes(
         exception.invalid_shape_ids = list(invalid_shape_ids)
         raise exception
 
-    # project back to WGS84
-    # feed_tables['shapes'].set_crs(WGS84, inplace=True)
+    # project back to LAT_LON_CRS
+    # feed_tables['shapes'].set_crs(LAT_LON_CRS, inplace=True)
     WranglerLogger.debug(f"create_feed_shapes() complete; feed_tables['shapes']:\n{feed_tables['shapes']}")    
 
 
@@ -2006,12 +2010,12 @@ def create_feed_from_gtfs_model(
     if not isinstance(roadway_net.nodes_df, gpd.GeoDataFrame):
         if "geometry" not in roadway_net.nodes_df.columns:
             node_geometry = [shapely.geometry.Point(x, y) for x, y in zip(roadway_net.nodes_df["X"], roadway_net.nodes_df["Y"])]
-            roadway_net.nodes_df = gpd.GeoDataFrame(roadway_net.nodes_df, geometry=node_geometry, crs=WGS84)
+            roadway_net.nodes_df = gpd.GeoDataFrame(roadway_net.nodes_df, geometry=node_geometry, crs=LAT_LON_CRS)
         else:
-            roadway_net.nodes_df = gpd.GeoDataFrame(roadway_net.nodes_df, crs=WGS84)
+            roadway_net.nodes_df = gpd.GeoDataFrame(roadway_net.nodes_df, crs=LAT_LON_CRS)
     else:
         if roadway_net.nodes_df.crs is None:
-            roadway_net.nodes_df = roadway_net.nodes_df.set_crs(WGS84)
+            roadway_net.nodes_df = roadway_net.nodes_df.set_crs(LAT_LON_CRS)
     
     # Add transit accessibility attributes to nodes based on connected links
     # Initialize columns if they don't exist
@@ -2090,7 +2094,7 @@ def create_feed_from_gtfs_model(
         stop_geometry = [
             shapely.geometry.Point(lon, lat) for lon, lat in zip(gtfs_model.stops["stop_lon"], gtfs_model.stops["stop_lat"])
         ]
-        feed_tables["stops"] = gpd.GeoDataFrame(gtfs_model.stops, geometry=stop_geometry, crs=WGS84)
+        feed_tables["stops"] = gpd.GeoDataFrame(gtfs_model.stops, geometry=stop_geometry, crs=LAT_LON_CRS)
 
     # Determine which stops are used by street-level transit vs other route types
     # Need to join stops -> stop_times -> trips -> routes to get route types
@@ -2268,17 +2272,17 @@ def create_feed_from_gtfs_model(
     if len(transit_only_links) > 0:
         transit_graph = build_transit_graph(transit_only_links)
         WranglerLogger.info(f"Built transit graph with {len(transit_graph)} nodes for connectivity matching")
-        WranglerLogger.debug(f"transit_graph:{transit_graph}")
+        WranglerLogger.debug(f"transit_graph:{pprint.pformat(transit_graph)}")
     
         # Handle connectivity-based matching for sequences of stations (non-mixed-traffic stops)
         # This will update stops_gdf_proj, adding model_node_id and match_distance_{crs_units} to stops 
         # that are not in mixed traffic. It may raise a TransitValidationError.
         connectivity_matched_count = match_stops_with_connectivity_for_stations(
-            gtfs_model,
-            feed_tables["stops"],
-            crs_units,
-            transit_nodes_gdf_proj,
-            transit_graph,
+            gtfs_model=gtfs_model,
+            stops_gdf_proj=feed_tables["stops"],
+            crs_units=crs_units,
+            transit_nodes_gdf_proj=transit_nodes_gdf_proj,
+            transit_graph=transit_graph,
             max_distance = MAX_DISTANCE_STOP[crs_units]
         )
     
@@ -2384,7 +2388,7 @@ def create_feed_from_gtfs_model(
 
         # Create exception with the unmatched stops dataframe attached
         exception = NodeNotFoundError(error_msg)
-        exception.unmatched_stops_gdf = unmatched_stops_gdf.to_crs(WGS84)
+        exception.unmatched_stops_gdf = unmatched_stops_gdf.to_crs(LAT_LON_CRS)
         raise exception
 
 
@@ -2550,7 +2554,7 @@ def filter_transit_by_boundary(
     # Ensure boundary is in a geographic CRS for spatial operations
     if boundary_gdf.crs is None:
         WranglerLogger.warning("Boundary has no CRS, assuming EPSG:4326")
-        boundary_gdf = boundary_gdf.set_crs(WGS84)
+        boundary_gdf = boundary_gdf.set_crs(LAT_LON_CRS)
     else:
         WranglerLogger.debug(f"Boundary CRS: {boundary_gdf.crs}")
     
@@ -2572,7 +2576,7 @@ def filter_transit_by_boundary(
     stops_gdf = gpd.GeoDataFrame(
         stops_df,
         geometry=gpd.points_from_xy(stops_df.stop_lon, stops_df.stop_lat),
-        crs=WGS84
+        crs=LAT_LON_CRS
     )
     
     # Reproject to match boundary CRS if needed
