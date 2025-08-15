@@ -473,11 +473,13 @@ def match_stops_with_connectivity_for_station_sequence(
     best_matches = None
     
     WranglerLogger.debug(f"  First stop candidates: {stop_candidates.get(first_stop, [])}")
+    fail_log_lines = []    # keep log lines for failure
     for first_node in stop_candidates.get(first_stop, []):
         matches = {first_stop: first_node}
         current_node = first_node
+        current_log_lines = [] # keep log lines for current iteration
         
-        WranglerLogger.debug(f"      [OK]   [01] {stop_info[first_stop]} ({first_stop}) -> Node {first_node}")
+        current_log_lines.append(f"      [OK]   [01] {stop_info[first_stop]} ({first_stop}) -> Node {first_node}")
         
         # Try to match subsequent stops
         success = True
@@ -501,7 +503,7 @@ def match_stops_with_connectivity_for_station_sequence(
                               ))
                 matches[stop_id] = best_node
                 current_node = best_node
-                WranglerLogger.debug(f"      [OK]   [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) -> Node {best_node}")
+                current_log_lines.append(f"      [OK]   [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) -> Node {best_node}")
             else:
                 # No connected candidate found
                 success = False
@@ -509,10 +511,15 @@ def match_stops_with_connectivity_for_station_sequence(
                     reason = f"No nodes within {max_distance} {crs_units}"
                 else:
                     reason = f"{len(candidates)} candidates ({candidates}) but none connected from node {current_node}"
-                WranglerLogger.debug(f"      [FAIL] [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) - {reason}")
+                current_log_lines.append(f"      [FAIL] [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) - {reason}")
+
+                # move current log_lines to failure
+                fail_log_lines.extend(current_log_lines)
+                current_log_lines = [] # start fresh
                 break
         
         if success:
+            for log_line in current_log_lines: WranglerLogger.debug(log_line)
             WranglerLogger.debug(f"      [SUCCESS] Matched all {len(matches)} stops using connectivity: matches={matches}")
             return matches
         
@@ -521,8 +528,10 @@ def match_stops_with_connectivity_for_station_sequence(
             best_match_count = len(matches)
             best_matches = matches
     
-    # If no connected path found, raise an exception
-    WranglerLogger.debug(f"      Connectivity failed - no fully connected path found")
+    # If no connected path found, raise an exception and log all of the failures
+    for log_line in fail_log_lines: WranglerLogger.debug(log_line)
+    WranglerLogger.error(f"      Connectivity failed - no fully connected path found")
+
     
     # Build detailed error message
     error_details = []
@@ -631,9 +640,17 @@ def match_stops_with_connectivity_for_stations(
             gtfs_model.stop_times['trip_id'].isin(route_dir_trips)
         ]
         
-        # Use the first trip's pattern as representative
-        first_trip = route_dir_trips.iloc[0]
-        route_stops = route_stop_times[route_stop_times['trip_id'] == first_trip][
+        # Use the longest trip's pattern as representative (most comprehensive stop pattern)
+        # Count stops per trip to find the one with the most stops
+        stops_per_trip = route_stop_times.groupby('trip_id')['stop_id'].count()
+        longest_trip = stops_per_trip.idxmax()  # Get trip_id with most stops
+        
+        WranglerLogger.debug(
+            f"Route {route_id} direction {direction_id}: Using trip {longest_trip} "
+            f"with {stops_per_trip[longest_trip]} stops (max among {len(stops_per_trip)} trips)"
+        )
+        
+        route_stops = route_stop_times[route_stop_times['trip_id'] == longest_trip][
             ['stop_id', 'stop_sequence']
         ].sort_values('stop_sequence')
         
@@ -774,7 +791,7 @@ def match_stops_for_mixed_traffic(
     Notes:
         If roadway_net.nodes_df is not a GeoDataFrame, converts it to one.
         Updates stops_gdf_proj in place, setting model_node_id and match_distance_{crs_units}
-        for matched stops.
+        for matched stops. Also updates the stop location to be that of the road node.
     """
     if crs_units not in ["feet","meters"]:
         raise ValueError(f"crs_units must be on of 'feet' or 'meters'; received {crs_units}")
@@ -840,6 +857,11 @@ def match_stops_for_mixed_traffic(
             # Match successful
             stops_gdf_proj.loc[stop_idx, "model_node_id"] = drive_nodes_gdf_proj.iloc[indices[i][0]]["model_node_id"]
             stops_gdf_proj.loc[stop_idx, f"match_distance_{crs_units}"] = distances[i][0]
+
+            # Update location to that of the road node
+            stops_gdf_proj.loc[stop_idx, "stop_lon"] = drive_nodes_gdf_proj.iloc[indices[i][0]]["X"]
+            stops_gdf_proj.loc[stop_idx, "stop_lat"] = drive_nodes_gdf_proj.iloc[indices[i][0]]["Y"]
+            stops_gdf_proj.loc[stop_idx, "geometry"] = drive_nodes_gdf_proj.iloc[indices[i][0]]["geometry"]
             matched_count += 1
         else:
             # Distance exceeds threshold - log warning with details
@@ -886,17 +908,26 @@ def match_stops_for_mixed_traffic(
     return matched_count
 
 
-def create_feed_shapes_for_station_only_route_types(feed_tables: Dict[str, pd.DataFrame]):
+def create_feed_shapes_for_station_only_route_types(
+    feed_tables: Dict[str, pd.DataFrame],
+    skip_stop_agencies: Optional[List[str]] = None
+):
     """Create shapes for statioin-only routes (STATION_ONLY_ROUTE_TYPES) based on stop sequences.
     
     This function modifies feed_tables['shapes'] in place by replacing shape points
     for STATION_ONLY_ROUTE_TYPES routes with sequences based on stops. 
-    It detects skip-stop patterns and builds comprehensive stop sequences
-    that include all stops along a route, filling in stops that may be skipped by express services.
+    
+    For agencies specified in skip_stop_agencies, it detects skip-stop patterns and builds 
+    comprehensive stop sequences that include all stops along a route, filling in stops 
+    that may be skipped by express services. For other agencies, it creates shapes based 
+    on each route's actual stop sequence without merging.
     
     Args:
         feed_tables: Dictionary of GTFS feed tables including routes, trips, stop_times,
                     stops, and shapes
+        skip_stop_agencies: Optional list of agency IDs that use skip-stop patterns.
+                           Only these agencies will have skip-stop detection applied.
+                           If None or empty, no skip-stop logic is applied.
     """    
     WranglerLogger.info("Creating shapes for STATION_ONLY_ROUTE_TYPES based on stop sequences")
     
@@ -947,15 +978,17 @@ def create_feed_shapes_for_station_only_route_types(feed_tables: Dict[str, pd.Da
     # Store new shape data
     new_shapes_list = []
     
-    # Process by agency and direction to detect skip-stop patterns
+    # Process by agency and direction
+    # Skip-stop detection only applies to agencies in skip_stop_agencies list
+    if skip_stop_agencies is None:
+        skip_stop_agencies = []  # Default to empty list if None
+    
     agency_dir_groups = station_only_stop_times.groupby(['agency_id', 'direction_id'], observed=False)
     
     for (agency_id, direction_id), agency_group_df in agency_dir_groups:
-        # Get all unique stops across all routes for this agency/direction
-        all_stops_sequences = {}
+        # Collect stops for each route
         route_stops = {}
         
-        # Collect stops for each route
         for route_id in agency_group_df['route_id'].unique():
             route_df = agency_group_df[agency_group_df['route_id'] == route_id]
             
@@ -965,71 +998,74 @@ def create_feed_shapes_for_station_only_route_types(feed_tables: Dict[str, pd.Da
             ).sort_values()
             
             route_stops[route_id] = route_stop_seq.index.tolist()
+        
+        # Check if this agency uses skip-stop patterns
+        if agency_id in skip_stop_agencies:
+            # Apply skip-stop detection logic for this agency
+            WranglerLogger.info(
+                f"Agency {agency_id} direction {direction_id}: Applying skip-stop detection"
+            )
             
-            # Add to overall stop sequence tracking
-            for stop_id in route_stop_seq.index:
-                if stop_id not in all_stops_sequences:
-                    all_stops_sequences[stop_id] = []
-                all_stops_sequences[stop_id].append(route_stop_seq[stop_id])
-        
-        # Find the most comprehensive route (likely the local)
-        max_stops_route = max(route_stops, key=lambda k: len(route_stops[k]))
-        local_stops = route_stops[max_stops_route]
-        
-        WranglerLogger.debug(
-            f"Agency {agency_id} direction {direction_id}: "
-            f"Route {max_stops_route} appears to be local with {len(local_stops)} stops"
-        )
-        
-        # Build comprehensive stop list by merging all routes' stops
-        # Start with the local route's stops as the base
-        comprehensive_stops = local_stops.copy()
-        
-        # For other routes, check if they're skip-stop versions
-        for route_id, stops in route_stops.items():
-            if route_id == max_stops_route:
-                continue
-                
-            # Check if this route's stops are a subset of the local
-            is_subset = all(stop in local_stops for stop in stops)
+            # Find the most comprehensive route (likely the local)
+            max_stops_route = max(route_stops, key=lambda k: len(route_stops[k]))
+            local_stops = route_stops[max_stops_route]
             
-            if is_subset:
-                WranglerLogger.debug(
-                    f"  Route {route_id} appears to be skip-stop "
-                    f"({len(stops)}/{len(local_stops)} stops)"
-                )
-            else:
-                LOCAL_EXTRA_STOPS = 5
-                # TODO: Only do the following if there are <= LOCAL_EXTRA_STOPS
-                # TODO: Otherwise, assume it's a different route
+            WranglerLogger.debug(
+                f"  Route {max_stops_route} appears to be local with {len(local_stops)} stops"
+            )
+            
+            # Build comprehensive stop list by merging all routes' stops
+            # Start with the local route's stops as the base
+            comprehensive_stops = local_stops.copy()
+            
+            # For other routes, check if they're skip-stop versions
+            for route_id, stops in route_stops.items():
+                if route_id == max_stops_route:
+                    continue
+                    
+                # Check if this route's stops are a subset of the local
+                is_subset = all(stop in local_stops for stop in stops)
                 
-                # Some stops might not be in the local - add them
-                for i, stop in enumerate(stops):
-                    if stop not in comprehensive_stops:
-                        # Find where to insert this stop
-                        if i > 0 and stops[i-1] in comprehensive_stops:
-                            # Insert after the previous stop
-                            idx = comprehensive_stops.index(stops[i-1]) + 1
-                            comprehensive_stops.insert(idx, stop)
-                        elif i < len(stops)-1 and stops[i+1] in comprehensive_stops:
-                            # Insert before the next stop
-                            idx = comprehensive_stops.index(stops[i+1])
-                            comprehensive_stops.insert(idx, stop)
-                        else:
-                            # Add to end if we can't determine position
-                            comprehensive_stops.append(stop)
-                
-                WranglerLogger.debug(
-                    f"  Route {route_id} has unique stops, merged into comprehensive list"
-                )
+                if is_subset:
+                    WranglerLogger.debug(
+                        f"  Route {route_id} appears to be skip-stop "
+                        f"({len(stops)}/{len(local_stops)} stops)"
+                    )
+                else:
+                    # there are extra stops -- add them to the comprehensive list
+                    prev_stop_count = len(comprehensive_stops)
+                    for i, stop in enumerate(stops):
+                        if stop not in comprehensive_stops:
+                            # Find where to insert this stop
+                            if i > 0 and stops[i-1] in comprehensive_stops:
+                                # Insert after the previous stop
+                                idx = comprehensive_stops.index(stops[i-1]) + 1
+                                comprehensive_stops.insert(idx, stop)
+                            elif i < len(stops)-1 and stops[i+1] in comprehensive_stops:
+                                # Insert before the next stop
+                                idx = comprehensive_stops.index(stops[i+1])
+                                comprehensive_stops.insert(idx, stop)
+                            else:
+                                # Add to end if we can't determine position
+                                comprehensive_stops.append(stop)
+
+                    if len(comprehensive_stops) > prev_stop_count:
+                        WranglerLogger.debug(
+                            f"  Route {route_id} has {len(comprehensive_stops)-prev_stop_count}"
+                            f" extra stops, merged into comprehensive list"
+                        )
+  
+            
+            WranglerLogger.info(
+                f"Agency {agency_id} direction {direction_id}: "
+                f"Built comprehensive sequence with {len(comprehensive_stops)} stops "
+                f"(from {len(route_stops)} routes)"
+            )
+        else:
+            # No skip-stop detection for this agency - use each route's stops as-is
+            comprehensive_stops = None  # Will process each route separately
         
-        WranglerLogger.info(
-            f"Agency {agency_id} direction {direction_id}: "
-            f"Built comprehensive sequence with {len(comprehensive_stops)} stops "
-            f"(from {len(route_stops)} routes)"
-        )
-        
-        # Now create shapes for each route using the comprehensive stop list
+        # Now create shapes for each route
         for route_id in agency_group_df['route_id'].unique():
             route_df = agency_group_df[agency_group_df['route_id'] == route_id]
             shape_ids = route_df['shape_id'].dropna().unique()
@@ -1052,8 +1088,16 @@ def create_feed_shapes_for_station_only_route_types(feed_tables: Dict[str, pd.Da
                 route_dir_tuples = route_df[route_df['shape_id'] == shape_id][['route_id', 'direction_id']].drop_duplicates()
                 route_dir_ids = [tuple(row) for row in route_dir_tuples.itertuples(index=False, name=None)]
                 
-                # Create shape points from comprehensive stops
-                for seq_num, stop_id in enumerate(comprehensive_stops):
+                # Determine which stops to use for this shape
+                if comprehensive_stops is not None:
+                    # Use comprehensive stops (skip-stop detection was applied)
+                    stops_to_use = comprehensive_stops
+                else:
+                    # Use this route's actual stops (no skip-stop detection)
+                    stops_to_use = route_stops[route_id]
+                
+                # Create shape points from the determined stops
+                for seq_num, stop_id in enumerate(stops_to_use):
                     # Get stop coordinates and other info
                     stop_info = feed_tables['stops'][feed_tables['stops']['stop_id'] == stop_id]
                     
@@ -1152,7 +1196,8 @@ def create_feed_shapes(
     roadway_net: RoadwayNetwork,
     local_crs: str,
     crs_units: str,
-    max_distance: float
+    max_distance: float,
+    skip_stop_agencies: Optional[List[str]] = None
 ):
     """Create feed shapes table by mapping shape points to roadway nodes.
     
@@ -1187,6 +1232,9 @@ def create_feed_shapes(
         local_crs: Local coordinate reference system for projection
         crs_units: 'feet' or 'meters', corresonding to local_crs
         max_distance: Maximum distance in feet to match shape points to nodes, in crs_units
+        skip_stop_agencies: Optional list of agency IDs that use skip-stop patterns.
+                           Only these agencies will have skip-stop detection applied
+                           when creating shapes for station-only route types.
     
     Raises:
         TransitValidationError: If any stop sequences don't correspond to roadway links. The exception contains:
@@ -1317,7 +1365,7 @@ def create_feed_shapes(
         )
 
     # Special handling for STATION_ONLY_ROUTE_TYPES
-    create_feed_shapes_for_station_only_route_types(feed_tables)
+    create_feed_shapes_for_station_only_route_types(feed_tables, skip_stop_agencies)
 
     # For each trip and stop in that trip, find the nearest shape point and update it with stop info
     # This uses a vectorized approach for better performance
@@ -1465,7 +1513,8 @@ def create_feed_shapes(
             WranglerLogger.debug(f"  Route-Direction pairs: {first_row.get('route_dir_ids', [])}")
             WranglerLogger.debug(f"  Trip IDs: {first_row.get('trip_ids', [])}")
 
-            debug_cols = ['shape_pt_sequence','shape_dist_traveled','stop_sequence','stop_id','stop_name','station_sequence',f'match_distance_{crs_units}']
+            debug_cols = ['shape_pt_sequence','shape_dist_traveled','stop_sequence','stop_id','stop_name','station_sequence',
+                          f'match_distance_{crs_units}', 'shape_pt_lon', 'shape_pt_lat']
             WranglerLogger.debug(f"\n{shape_df.loc[pd.notna(shape_df['stop_id']), debug_cols]}")
 
     
@@ -1625,7 +1674,8 @@ def create_feed_shapes(
             WranglerLogger.debug(f"  Route-Direction pairs: {first_row.get('route_dir_ids', [])}")
             WranglerLogger.debug(f"  Trip IDs: {first_row.get('trip_ids', [])}")
 
-            debug_cols = ['shape_pt_sequence','shape_dist_traveled','stop_sequence','stop_id','stop_name','station_sequence','shape_model_node_id',f'match_distance_{crs_units}']
+            debug_cols = ['shape_pt_sequence','shape_dist_traveled','stop_sequence','stop_id','stop_name','station_sequence',
+                          'shape_model_node_id',f'match_distance_{crs_units}','shape_pt_lon','shape_pt_lat']
             WranglerLogger.debug(f"\n{shape_df[debug_cols]}")
 
 
@@ -1684,7 +1734,8 @@ def create_feed_shapes(
         
         # Use the drive graph we already created for pathfinding
         # (G_drive was created earlier when building the BallTree)
-        
+        WranglerLogger.debug(f"roadway_net.nodes_df.head():\n{roadway_net.nodes_df.head()}")
+
         # Create node coordinates lookup for intermediate nodes
         node_coords = {}
         for _, node in roadway_net.nodes_df.iterrows():
@@ -1732,6 +1783,9 @@ def create_feed_shapes(
                 # Add intermediate nodes to shapes (skip first and last as they already exist)
                 if path_length > 1:  # There are intermediate nodes
                     intermediate_nodes = list(path)[1:-1]  # Convert to list and get intermediate nodes
+
+                    # if shape_id in random_shape_ids:
+                        
                     for i, intermediate_node in enumerate(intermediate_nodes, start=1):
                         if intermediate_node in node_coords:
                             lon, lat = node_coords[intermediate_node]
@@ -1751,17 +1805,10 @@ def create_feed_shapes(
                             
                             new_shape_points.append(new_point)
                 
-                # Only show path details if it's reasonably short
-                if path_length <= 10:
-                    WranglerLogger.debug(
-                        f"Found path for shape {row['shape_id']} segment ({node_a} -> {node_b}): "
-                        f"{path_length} hop(s) through nodes {path}"
-                    )
-                else:
-                    WranglerLogger.debug(
-                        f"Found path for shape {row['shape_id']} segment ({node_a} -> {node_b}): "
-                        f"{path_length} hop(s)"
-                    )
+                WranglerLogger.debug(
+                    f"Found path for shape {row['shape_id']} segment ({node_a} -> {node_b}): "
+                    f"{path_length} hop(s) through nodes {path}"
+                )
             except nx.NetworkXNoPath:
                 # No path exists
                 still_invalid_segments.append(idx)
@@ -1903,6 +1950,7 @@ def create_feed_from_gtfs_model(
     crs_units: str,
     time_periods: Optional[List[Dict[str, str]]] = None,
     default_frequency_for_onetime_route: int = 10800,
+    skip_stop_agencies: Optional[List[str]] = None,
 ) -> Feed:
     """Converts a GTFS feed to a Wrangler Feed object compatible with the given RoadwayNetwork.
     
@@ -1926,6 +1974,9 @@ def create_feed_from_gtfs_model(
         crs_units: distance measurement for local_crs, "feet" or "meters"
         default_frequency_for_onetime_route (int, optional): Default headway in seconds
             for routes with only one trip in a period. Defaults to 10800 (3 hours).
+        skip_stop_agencies (Optional[List[str]]): List of agency IDs that use skip-stop patterns.
+            Only these agencies will have skip-stop detection applied when creating shapes 
+            for station-only route types.
 
     Returns:
         Feed: Wrangler Feed object with stops mapped to roadway network nodes
@@ -2246,6 +2297,10 @@ def create_feed_from_gtfs_model(
     station_stops = feed_tables["stops"][~feed_tables["stops"]["stop_in_mixed_traffic"]]
     station_stops_unmatched = station_stops[station_stops.index.isin(feed_tables["stops"][unmatched_mask].index)]
     WranglerLogger.debug(f"station_stops_unmatched:\n{station_stops_unmatched}")
+
+    # tally by parent station vs non-parent
+    WranglerLogger.debug(f"station_stops_unmatched.is_parent.value_counts(dropna=False):\n{station_stops_unmatched.is_parent.value_counts(dropna=False)}")
+
     if len(station_stops_unmatched) > 0:
         non_street_stop_indices = feed_tables["stops"][~feed_tables["stops"]["stop_in_mixed_traffic"] & unmatched_mask].index
         non_street_stop_coords = np.array(
@@ -2393,7 +2448,8 @@ def create_feed_from_gtfs_model(
             roadway_net,  # Pass RoadwayNetwork object
             local_crs=local_crs,
             crs_units=crs_units,
-            max_distance=MAX_DISTANCE_SHAPE[crs_units]
+            max_distance=MAX_DISTANCE_SHAPE[crs_units],
+            skip_stop_agencies=skip_stop_agencies
         )
         WranglerLogger.debug(f"feed_tables['shapes']=\n{feed_tables['shapes']}")
     else:
