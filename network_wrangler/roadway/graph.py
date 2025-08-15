@@ -159,7 +159,7 @@ def links_nodes_to_ox_graph(
             # This is the only exception for which we have a workaround
             # Does this still work given the u,v,key multi-indexing?
             #
-            WranglerLogger.warn(
+            WranglerLogger.warning(
                 "Please upgrade your OSMNX package. For now, using deprecated "
                 "osmnx.gdfs_to_graph because osmnx.graph_from_gdfs not found"
             )
