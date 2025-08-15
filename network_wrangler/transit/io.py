@@ -376,16 +376,16 @@ def load_transit(
 
 
 def write_transit(
-    transit_net,
+    transit_obj: Union[TransitNetwork, Feed, GtfsModel],
     out_dir: Union[Path, str] = ".",
     prefix: Optional[Union[Path, str]] = None,
     file_format: Literal["txt", "csv", "parquet"] = "txt",
     overwrite: bool = True,
 ) -> None:
-    """Writes a network in the transit network standard.
+    """Writes a transit network, feed, or GTFS model to files.
 
     Args:
-        transit_net: a TransitNetwork instance
+        transit_obj: a TransitNetwork, Feed, or GtfsModel instance
         out_dir: directory to write the network to
         file_format: the format of the output files. Defaults to "txt" which is csv with txt
             file format.
@@ -394,11 +394,30 @@ def write_transit(
     """
     out_dir = Path(out_dir)
     prefix = f"{prefix}_" if prefix else ""
-    for table in transit_net.feed.table_names:
-        df = transit_net.feed.get_table(table)
-        outpath = out_dir / f"{prefix}{table}.{file_format}"
-        write_table(df, outpath, overwrite=overwrite)
-    WranglerLogger.info(f"Wrote {len(transit_net.feed.tables)} files to {out_dir}")
+    
+    # Determine the data source based on input type
+    if isinstance(transit_obj, TransitNetwork):
+        data_source = transit_obj.feed
+        source_type = "TransitNetwork"
+    elif isinstance(transit_obj, (Feed, GtfsModel)):
+        data_source = transit_obj
+        source_type = type(transit_obj).__name__
+    else:
+        raise TypeError(
+            f"transit_obj must be a TransitNetwork, Feed, or GtfsModel instance, "
+            f"not {type(transit_obj).__name__}"
+        )
+    
+    # Write tables
+    tables_written = 0
+    for table in data_source.table_names:
+        df = data_source.get_table(table)
+        if df is not None and len(df) > 0:  # Only write non-empty tables
+            outpath = out_dir / f"{prefix}{table}.{file_format}"
+            write_table(df, outpath, overwrite=overwrite)
+            tables_written += 1
+    
+    WranglerLogger.info(f"Wrote {tables_written} {source_type} tables to {out_dir}")
 
 
 def convert_transit_serialization(
