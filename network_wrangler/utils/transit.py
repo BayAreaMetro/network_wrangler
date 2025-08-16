@@ -1229,6 +1229,93 @@ def create_feed_shapes_for_station_only_route_types(
     )
 
 
+def build_shape_links_gdf(
+    shapes_df: pd.DataFrame,
+    roadway_links_df: pd.DataFrame,
+    include_merge_indicator: bool = True
+) -> gpd.GeoDataFrame:
+    """Build a GeoDataFrame of shape segment links from consecutive shape points.
+    
+    This function creates a GeoDataFrame where each row represents a segment between
+    consecutive shape points as a LineString geometry, with information about whether 
+    that segment corresponds to an actual roadway link.
+    
+    Args:
+        shapes_df: DataFrame with shape points, must contain:
+            - shape_id: Shape identifier
+            - shape_pt_sequence: Order of points in shape
+            - shape_model_node_id: Roadway node ID for this shape point
+            - shape_pt_lat: Latitude of shape point
+            - shape_pt_lon: Longitude of shape point
+        roadway_links_df: DataFrame of roadway links with columns A, B, model_link_id
+        include_merge_indicator: If True, includes _merge column indicating join result
+            
+    Returns:
+        GeoDataFrame with one row per shape segment containing:
+            - All columns from shapes_df
+            - next_node: The next node in the sequence
+            - next_pt_lat: Latitude of next point
+            - next_pt_lon: Longitude of next point
+            - A: Source node ID (same as shape_model_node_id)
+            - B: Target node ID (same as next_node)
+            - model_link_id: Link ID if segment matches a roadway link, NaN otherwise
+            - _merge: Join indicator ('both', 'left_only') if include_merge_indicator=True
+            - geometry: LineString geometry of the segment in LAT_LON_CRS
+    """
+    # Sort shapes by shape_id and sequence
+    shape_links_df = shapes_df.sort_values(['shape_id', 'shape_pt_sequence']).copy()
+    
+    # Create consecutive node pairs for each shape
+    shape_links_df['next_node'] = shape_links_df.groupby('shape_id')['shape_model_node_id'].shift(-1)
+    shape_links_df['next_pt_lat'] = shape_links_df.groupby('shape_id')['shape_pt_lat'].shift(-1)
+    shape_links_df['next_pt_lon'] = shape_links_df.groupby('shape_id')['shape_pt_lon'].shift(-1)
+    
+    # Filter to only rows that have a next node (excludes last point of each shape)
+    # and filter out self-loops where shape_model_node_id == next_node
+    has_next = shape_links_df['next_node'].notna()
+    is_self_loop = shape_links_df['shape_model_node_id'] == shape_links_df['next_node']
+    
+    num_self_loops = (has_next & is_self_loop).sum()
+    if num_self_loops > 0:
+        WranglerLogger.debug(f"Filtering out {num_self_loops:,} self-loop segments where shape_model_node_id == next_node")
+    
+    shape_links_df = shape_links_df[has_next & ~is_self_loop]
+    shape_links_df['A'] = shape_links_df['shape_model_node_id']
+    shape_links_df['B'] = shape_links_df['next_node'].astype(int)
+    
+    # Create LineString geometries for each segment
+    segment_lines = []
+    for _, row in shape_links_df.iterrows():
+        line = shapely.geometry.LineString([
+            (row['shape_pt_lon'], row['shape_pt_lat']),
+            (row['next_pt_lon'], row['next_pt_lat'])
+        ])
+        segment_lines.append(line)
+    
+    # Convert to GeoDataFrame with LAT_LON_CRS
+    shape_links_gdf = gpd.GeoDataFrame(
+        shape_links_df,
+        geometry=segment_lines,
+        crs=LAT_LON_CRS
+    )
+    
+    # Left join shape segments with roadway links to find invalid segments
+    shape_links_gdf = pd.merge(
+        shape_links_gdf,
+        roadway_links_df[['A','B','model_link_id']],
+        on=['A', 'B'],
+        how='left',
+        validate="many_to_one",
+        suffixes=('','_rd'),
+        indicator=include_merge_indicator
+    )
+    
+    # Ensure the result is still a GeoDataFrame with correct CRS
+    shape_links_gdf = gpd.GeoDataFrame(shape_links_gdf, crs=LAT_LON_CRS)
+    
+    return shape_links_gdf
+
+
 def create_feed_shapes(
     feed_tables: Dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
@@ -1721,47 +1808,21 @@ def create_feed_shapes(
     # For each shape_id, when sorted by shape_pt_sequence, each consecutive pair of nodes in feed_tables['shapes']
     # needs to correspond to a link in roadway_net.links_df.
 
-    # Validate that consecutive shape points correspond to actual links in the network using vectorized operations
-    
-    # Create shape_links_df:
-    # Sort shapes by shape_id and sequence
-    shape_links_df = feed_tables['shapes'].sort_values(['shape_id', 'shape_pt_sequence']).copy()
-    
-    # Create consecutive node pairs for each shape
-    shape_links_df['next_node'  ] = shape_links_df.groupby('shape_id')['shape_model_node_id'].shift(-1)
-    shape_links_df['next_pt_lat'] = shape_links_df.groupby('shape_id')['shape_pt_lat'].shift(-1)
-    shape_links_df['next_pt_lon'] = shape_links_df.groupby('shape_id')['shape_pt_lon'].shift(-1)
-    
-    # Filter to only rows that have a next node (excludes last point of each shape)
-    # and filter out self-loops where shape_model_node_id == next_node
-    has_next = shape_links_df['next_node'].notna()
-    is_self_loop = shape_links_df['shape_model_node_id'] == shape_links_df['next_node']
-    
-    num_self_loops = (has_next & is_self_loop).sum()
-    if num_self_loops > 0:
-        WranglerLogger.debug(f"Filtering out {num_self_loops:,} self-loop segments where shape_model_node_id == next_node")
-    
-    shape_links_df = shape_links_df[has_next & ~is_self_loop]
-    shape_links_df['A'] = shape_links_df['shape_model_node_id']
-    shape_links_df['B'] = shape_links_df['next_node'].astype(int)
-    WranglerLogger.debug(f"Before merging shape_links_df with roadway_net.links_df: shape_links_df.head():\n{shape_links_df.head()}")
+    WranglerLogger.debug(f"Before build_shape_links_gdf: feed_tables['shapes'].head():\n{feed_tables['shapes'].head()}")
 
-    # Left join shape segments with roadway links to find invalid segments
-    shape_links_cols = shape_links_df.columns.tolist()
-    shape_links_df = pd.merge(
-        shape_links_df,
-        roadway_net.links_df[['A','B','model_link_id']],
-        on=['A', 'B'],
-        how='left',
-        validate="many_to_one",
-        suffixes=('','_rd'),
-        indicator=True
+    # Validate that consecutive shape points correspond to actual links in the network using vectorized operations
+    shape_links_gdf = build_shape_links_gdf(
+        feed_tables['shapes'], 
+        roadway_net.links_df,
+        include_merge_indicator=True
     )
-    WranglerLogger.debug(f"After merging shape_links_df with roadway_net.links_df: shape_links_df.head():\n{shape_links_df.head()}")
-    WranglerLogger.debug(f"shape_links_df._merge.value_counts():\n{shape_links_df._merge.value_counts()}")
+    
+    shape_links_cols = shape_links_gdf.columns.tolist()
+    WranglerLogger.debug(f"After build_shape_links_gdf: shape_links_gdf.head():\n{shape_links_gdf.head()}")
+    WranglerLogger.debug(f"shape_links_gdf._merge.value_counts():\n{shape_links_gdf._merge.value_counts()}")
     
     # Find invalid segments (where _merge is left_only)
-    invalid_shape_links_gdf= shape_links_df[shape_links_df['_merge']=="left_only"]
+    invalid_shape_links_gdf= shape_links_gdf[shape_links_gdf['_merge']=="left_only"]
     WranglerLogger.debug(f"invalid_shape_links_gdf.head():\n{invalid_shape_links_gdf.head()}")
     WranglerLogger.debug(f"{len(invalid_shape_links_gdf)=}")
 
@@ -1775,16 +1836,12 @@ def create_feed_shapes(
         WranglerLogger.debug(f"roadway_net.nodes_df.head():\n{roadway_net.nodes_df.head()}")
 
         # Create node coordinates lookup for intermediate nodes
+        # X and Y columns are already in LAT_LON_CRS
         node_coords = {}
         for _, node in roadway_net.nodes_df.iterrows():
             node_id = node['model_node_id']
-            if 'geometry' in roadway_net.nodes_df.columns:
-                # If geometry exists, use it
-                geom = node['geometry']
-                node_coords[node_id] = (geom.x, geom.y)
-            elif 'X' in roadway_net.nodes_df.columns and 'Y' in roadway_net.nodes_df.columns:
-                # Otherwise use X, Y coordinates
-                node_coords[node_id] = (node['X'], node['Y'])
+            # Use X (longitude) and Y (latitude) directly - they're already in LAT_LON_CRS
+            node_coords[node_id] = (node['X'], node['Y'])
         
         # Try to find paths for invalid segments
         resolved_segments = []
@@ -1878,10 +1935,11 @@ def create_feed_shapes(
             feed_tables['shapes'] = pd.concat([feed_tables['shapes'], new_points_df], ignore_index=True)
             feed_tables['shapes'] = feed_tables['shapes'].sort_values(['shape_id', 'shape_pt_sequence'])
             
-            WranglerLogger.info(
-                f"Added {len(new_shape_points):,} intermediate nodes to shapes from pathfinding"
-            )
-        
+            if row['shape_id'] in random_shape_ids:            
+                WranglerLogger.info(
+                    f"Added {len(new_shape_points):,} intermediate nodes to shapes from pathfinding"
+                )
+                WranglerLogger.debug(f"\n{feed_tables['shapes'].loc[feed_tables['shapes']['shape_id'] == row['shape_id']]}")        
         # Log summary of resolution attempts
         if resolved_segments:
             WranglerLogger.info(
@@ -1899,45 +1957,31 @@ def create_feed_shapes(
         # Step 11: Create GeoDataFrames for both valid and invalid shape segments
         # Convert invalid segments to 2-Point LineString geodataframe
 
-        # Create LineStrings from start and end points
-        segment_lines = []
-        for _, row in invalid_shape_links_gdf.iterrows():
-            line = shapely.geometry.LineString([
-                (row['shape_pt_lon'], row['shape_pt_lat']),
-                (row['next_pt_lon'], row['next_pt_lat'])
-            ])
-            segment_lines.append(line)
+        # If new shape points were added from pathfinding, rebuild shape_links_gdf to include them
+        if new_shape_points:
+            WranglerLogger.info(f"Rebuilding shape links to include {len(new_shape_points):,} new intermediate points from pathfinding")
+            
+            # Rebuild shape_links_gdf with the updated shapes that include new points
+            shape_links_gdf = build_shape_links_gdf(
+                feed_tables['shapes'], 
+                roadway_net.links_df,
+                include_merge_indicator=True
+            )
+            
+            # Update invalid_shape_links_gdf to reflect the new segments
+            invalid_shape_links_gdf = shape_links_gdf[shape_links_gdf['_merge'] == 'left_only'].copy()
+            
+            WranglerLogger.info(f"After including pathfinding points: {len(shape_links_gdf[shape_links_gdf['_merge'] == 'both']):,} valid segments, {len(invalid_shape_links_gdf):,} invalid segments")
         
-        # Create GeoDataFrame with invalid segments
-        shape_links_cols.remove('geometry')
-        WranglerLogger.debug(f"shape_links_cols={shape_links_cols}")
-        invalid_shape_links_gdf = gpd.GeoDataFrame(
-            invalid_shape_links_gdf[shape_links_cols],
-            geometry=segment_lines,
-            crs=LAT_LON_CRS
-        )
+        # invalid_shape_links_gdf already has geometry from build_shape_links_gdf
         WranglerLogger.debug(f"invalid_shape_links_gdf=\n{invalid_shape_links_gdf}")
         
         # Add the valid links between shape points that correspond to roadway links
         # Get valid segments (where _merge is 'both')
-        valid_shape_links_df = shape_links_df[shape_links_df['_merge'] == 'both'].copy()
+        valid_shape_links_gdf = shape_links_gdf[shape_links_gdf['_merge'] == 'both'].copy()
         
-        if len(valid_shape_links_df) > 0:
-            # Create LineStrings for valid segments too
-            valid_segment_lines = []
-            for _, row in valid_shape_links_df.iterrows():
-                line = shapely.geometry.LineString([
-                    (row['shape_pt_lon'], row['shape_pt_lat']),
-                    (row['next_pt_lon'], row['next_pt_lat'])
-                ])
-                valid_segment_lines.append(line)
-            
-            # Create GeoDataFrame with valid segments
-            valid_shape_links_gdf = gpd.GeoDataFrame(
-                valid_shape_links_df[shape_links_cols],
-                geometry=valid_segment_lines,
-                crs=LAT_LON_CRS
-            )
+        if len(valid_shape_links_gdf) > 0:
+            # valid_shape_links_gdf already has geometry from build_shape_links_gdf
             WranglerLogger.info(f"Found {len(valid_shape_links_gdf):,} valid shape segments that correspond to roadway links")
         else:
             valid_shape_links_gdf = None
