@@ -464,7 +464,6 @@ def match_stops_with_connectivity_for_station_sequence(
     fail_log_seq_len = 0
     for first_node in stop_candidates.get(first_stop, []):
         matches = {first_stop: first_node}
-        current_stop_id = first_stop
         current_node = first_node
         current_log_lines = [] # keep log lines for current iteration
         
@@ -472,7 +471,9 @@ def match_stops_with_connectivity_for_station_sequence(
         
         # Try to match subsequent stops
         success = True
-        
+
+        previous_stop_id = first_stop
+        previous_node_id = first_node
         for i in range(1, len(ordered_stops)):
             stop_id = ordered_stops[i]
             candidates = stop_candidates.get(stop_id, [])
@@ -482,6 +483,13 @@ def match_stops_with_connectivity_for_station_sequence(
                 node for node in candidates 
                 if node in transit_graph.get(current_node, set())
             ]
+            # If this is a different stop from previous, don't allow mapping to the same node
+            if (stop_id != previous_stop_id) and (current_node in connected_candidates):
+                WranglerLogger.debug(
+                    f"      Removing node {current_node} from candidates for stop {stop_id} "
+                    f"(different from previous stop {previous_stop_id})"
+                )
+                connected_candidates.remove(current_node)
             
             if connected_candidates:
                 # Choose the closest connected candidate
@@ -492,10 +500,10 @@ def match_stops_with_connectivity_for_station_sequence(
                               ))
                 matches[stop_id] = best_node
                 current_log_lines.append(f"      [OK]   [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) -> Node {best_node}")
-                # Note: it shouldn't be the same as the previous node...
-                if (best_node == current_node) and (stop_id != current_stop_id):
-                    WranglerLogger.warning(f"Two different consecutive stops are mapping to the same node: {best_node}")
-                current_stop_id = stop_id
+                # Update previous tracking variables
+                previous_stop_id = stop_id
+                previous_node_id = best_node  # Use the newly selected node, not the old current_node
+                # Move current forward
                 current_node = best_node
             else:
                 # No connected candidate found
@@ -521,6 +529,8 @@ def match_stops_with_connectivity_for_station_sequence(
             WranglerLogger.debug(f"      [SUCCESS] Matched all {len(matches)} stops using connectivity: matches={matches}")
 
             # Apply matches by updating stop_gdf_proj in place
+            previous_node_id = None
+            previous_stop_id = None
             for stop_id, node_id in matches.items():
                 if stop_id not in stops_gdf_proj['stop_id'].values: raise Exception("This shouldn't happen")
 
@@ -541,6 +551,10 @@ def match_stops_with_connectivity_for_station_sequence(
                 stops_gdf_proj.loc[stop_idx, 'stop_lat'] = candidate_node['Y']
                 stops_gdf_proj.loc[stop_idx, 'geometry'] = candidate_node['geometry']
 
+                if (previous_stop_id != stop_id) and (previous_node_id == node_id):
+                    WranglerLogger.warning(f"Two different consecutive stops are mapping to the same node {node_id}: {previous_stop_id} and {stop_id}")
+                previous_node_id = node_id
+                previous_stop_id = stop_id
             return
     
     # If no connected path found, raise an exception and log all of the failures
