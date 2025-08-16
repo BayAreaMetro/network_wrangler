@@ -484,6 +484,8 @@ def match_stops_with_connectivity_for_station_sequence(
                 if node in transit_graph.get(current_node, set())
             ]
             # If this is a different stop from previous, don't allow mapping to the same node
+            # TODO: Do the reverse of this; default to not having it included when we build the graph
+            # and handle stop_id == previous_stop_id as a special case
             if (stop_id != previous_stop_id) and (current_node in connected_candidates):
                 WranglerLogger.debug(
                     f"      Removing node {current_node} from candidates for stop {stop_id} "
@@ -492,19 +494,41 @@ def match_stops_with_connectivity_for_station_sequence(
                 connected_candidates.remove(current_node)
             
             if connected_candidates:
-                # Choose the closest connected candidate
+                # Choose the closest connected candidate that's within MAX_DISTANCE_STOP
                 stop_geom = stops_gdf_proj.loc[stops_gdf_proj['stop_id'] == stop_id, 'geometry'].iloc[0]
-                best_node = min(connected_candidates, 
-                              key=lambda n: stop_geom.distance(
-                                  candidate_nodes_gdf[candidate_nodes_gdf['model_node_id'] == n].geometry.iloc[0]
-                              ))
-                matches[stop_id] = best_node
-                current_log_lines.append(f"      [OK]   [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) -> Node {best_node}")
-                # Update previous tracking variables
-                previous_stop_id = stop_id
-                previous_node_id = best_node  # Use the newly selected node, not the old current_node
-                # Move current forward
-                current_node = best_node
+                
+                # Filter candidates to only those within max_distance
+                candidates_with_distances = []
+                for node in connected_candidates:
+                    node_geom = candidate_nodes_gdf[candidate_nodes_gdf['model_node_id'] == node].geometry.iloc[0]
+                    distance = stop_geom.distance(node_geom)
+                    if distance <= max_distance:
+                        candidates_with_distances.append((node, distance))
+                
+                if candidates_with_distances:
+                    # Choose the closest one from the filtered candidates
+                    best_node, best_distance = min(candidates_with_distances, key=lambda x: x[1])
+                    matches[stop_id] = best_node
+                    current_log_lines.append(f"      [OK]   [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) -> Node {best_node} (distance: {best_distance:.1f} {crs_units})")
+                    # Update previous tracking variables
+                    previous_stop_id = stop_id
+                    previous_node_id = best_node  # Use the newly selected node, not the old current_node
+                    # Move current forward
+                    current_node = best_node
+                else:
+                    # No connected candidates within max_distance
+                    success = False
+                    reason = f"All {len(connected_candidates)} connected candidates exceed {max_distance} {crs_units}"
+                    current_log_lines.append(f"      [FAIL] [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) - {reason}")
+                    # move current log_lines to failure, if it's a longer sequence than we've seen before
+                    if len(current_log_lines) > fail_log_seq_len:
+                        fail_log_lines = current_log_lines # discard previous
+                        fail_log_seq_len = len(current_log_lines)
+                    elif len(current_log_lines) == fail_log_seq_len:
+                        fail_log_lines.extend(current_log_lines) # keep in addition to previous
+                        fail_log_seq_len = len(current_log_lines)
+                    current_log_lines = [] # start fresh
+                    break
             else:
                 # No connected candidate found
                 success = False
@@ -686,7 +710,7 @@ def match_stops_with_connectivity_for_stations(
                     stops_gdf_proj=stops_gdf_proj,
                     max_distance=max_distance,
                 )
-                WranglerLogger.info(f"SUCCESS for FULL ROUTE {route_id} direction={direction_id}")
+                WranglerLogger.info(f"Matched stations (using connectivity) to nodes for full route {route_id} direction={direction_id}")
                 debug_df = pd.merge(sequence_df, stops_gdf_proj, on='stop_id', how='left')
                 debug_cols = ['stop_id','stop_name','stop_lat','stop_lon','model_node_id','station_sequence',f'match_distance_{crs_units}']
                 WranglerLogger.debug(f"\n{debug_df[debug_cols]}")
@@ -2286,7 +2310,7 @@ def create_feed_from_gtfs_model(
     if len(transit_only_links) > 0:
         transit_graph = build_transit_graph(transit_only_links)
         WranglerLogger.info(f"Built transit graph with {len(transit_graph)} nodes for connectivity matching")
-        WranglerLogger.debug(f"transit_graph:{pprint.pformat(transit_graph)}")
+        # WranglerLogger.debug(f"transit_graph:{pprint.pformat(transit_graph)}")
     
         # Handle connectivity-based matching for sequences of stations (non-mixed-traffic stops)
         # This will update stops_gdf_proj, adding model_node_id and match_distance_{crs_units} to stops 
