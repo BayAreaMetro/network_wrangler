@@ -370,9 +370,7 @@ def build_transit_graph(transit_links_df: pd.DataFrame) -> Dict[int, set]:
             graph[node_a] = set()
         if node_b not in graph:
             graph[node_b] = set()
-        # Add node_a to node_a since GTFS may have double stops
-        graph[node_a].add(node_a)
-        # Only add edge from A to B (directed)
+        # Only add edge from A to B (directed) - no self-loops by default
         graph[node_a].add(node_b)
     return graph
 
@@ -476,6 +474,13 @@ def match_stops_with_connectivity_for_station_sequence(
         previous_node_id = first_node
         for i in range(1, len(ordered_stops)):
             stop_id = ordered_stops[i]
+
+            # Special case: if stop_id == previous_stop_id, just use the same node
+            if stop_id == previous_stop_id:
+                matches[stop_id] = current_node
+                current_log_lines.append(f"      [OK]   [{i+1:02d}] {stop_info[stop_id]} ({stop_id}) -> Node {current_node} (same stop as previous)")
+                continue
+
             candidates = stop_candidates.get(stop_id, [])
             
             # Find candidates that are connected to current_node
@@ -483,16 +488,7 @@ def match_stops_with_connectivity_for_station_sequence(
                 node for node in candidates 
                 if node in transit_graph.get(current_node, set())
             ]
-            # If this is a different stop from previous, don't allow mapping to the same node
-            # TODO: Do the reverse of this; default to not having it included when we build the graph
-            # and handle stop_id == previous_stop_id as a special case
-            if (stop_id != previous_stop_id) and (current_node in connected_candidates):
-                WranglerLogger.debug(
-                    f"      Removing node {current_node} from candidates for stop {stop_id} "
-                    f"(different from previous stop {previous_stop_id})"
-                )
-                connected_candidates.remove(current_node)
-            
+
             if connected_candidates:
                 # Choose the closest connected candidate that's within MAX_DISTANCE_STOP
                 stop_geom = stops_gdf_proj.loc[stops_gdf_proj['stop_id'] == stop_id, 'geometry'].iloc[0]
@@ -1846,23 +1842,25 @@ def create_feed_shapes(
                                     new_point[col] = row[col]
                             
                             new_shape_points.append(new_point)
-                
-                WranglerLogger.debug(
-                    f"Found path for shape {row['shape_id']} segment ({node_a} -> {node_b}): "
-                    f"{path_length} hop(s) through nodes {path}"
-                )
+                if row['shape_id'] in random_shape_ids:
+                    WranglerLogger.debug(
+                        f"Found path for shape {row['shape_id']} segment ({node_a} -> {node_b}): "
+                        f"{path_length} hop(s) through nodes {path}"
+                    )
             except nx.NetworkXNoPath:
                 # No path exists
                 still_invalid_segments.append(idx)
-                WranglerLogger.warning(
-                    f"No path exists from {node_a} to {node_b} in shape {row['shape_id']}"
-                )
+                if row['shape_id'] in random_shape_ids:
+                    WranglerLogger.warning(
+                        f"No path exists from {node_a} to {node_b} in shape {row['shape_id']}"
+                    )
             except nx.NodeNotFound as e:
                 # One or both nodes don't exist in the network
                 still_invalid_segments.append(idx)
-                WranglerLogger.warning(
-                    f"Node not found in network for shape {row['shape_id']}: {e}"
-                )
+                if row['shape_id'] in random_shape_ids:
+                    WranglerLogger.warning(
+                        f"Node not found in network for shape {row['shape_id']}: {e}"
+                    )
         
         # Add new intermediate points to feed_tables['shapes']
         if new_shape_points:
