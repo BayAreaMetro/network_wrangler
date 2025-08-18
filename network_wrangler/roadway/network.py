@@ -166,6 +166,17 @@ class RoadwayNetwork(BaseModel):
     _selections: dict[str, Selections] = {}
     _modal_graphs: dict[str, dict] = defaultdict(lambda: {"graph": None, "hash": None})
 
+    def __str__(self):
+        """Return string representation of RoadwayNetwork.
+        
+        Returns:
+            str: Summary string showing network statistics and dataframe contents.
+        """
+        my_str = f"RoadwayNetwork(nodes={len(self.nodes_df)}, links={len(self.links_df)})"
+        my_str += f"\nnodes_df (type={type(self.nodes_df)}):\n{self.nodes_df}"
+        my_str += f"\nlinks_df (type={type(self.links_df)}):\n{self.links_df}"
+        return my_str
+
     @field_validator("config")
     def validate_config(cls, v):
         """Validate config."""
