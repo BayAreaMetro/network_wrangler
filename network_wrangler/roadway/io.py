@@ -152,27 +152,30 @@ def load_roadway_from_dataframes(
     )
     from ..utils.models import validate_df_to_model  # noqa: PLC0415
     from .network import RoadwayNetwork  # noqa: PLC0415
+    from .links.create import data_to_links_df  # noqa: PLC0415
+    from .nodes.create import data_to_nodes_df  # noqa: PLC0415
+    from .shapes.create import df_to_shapes_df  # noqa: PLC0415
 
     if not isinstance(config, WranglerConfig):
         config = load_wrangler_config(config)
 
-    # Validate DataFrames against Pandera schemas
-    WranglerLogger.debug("Validating nodes_df against RoadNodesTable schema")
-    validated_nodes_df = validate_df_to_model(nodes_df, RoadNodesTable)
+    # Process dataframes through the standard creation functions to ensure attrs are set
+    WranglerLogger.debug("Processing nodes_df through data_to_nodes_df")
+    processed_nodes_df = data_to_nodes_df(nodes_df, config=config)
 
-    WranglerLogger.debug("Validating links_df against RoadLinksTable schema")
-    validated_links_df = validate_df_to_model(links_df, RoadLinksTable)
+    WranglerLogger.debug("Processing links_df through data_to_links_df")
+    processed_links_df = data_to_links_df(links_df, nodes_df=processed_nodes_df)
 
-    validated_shapes_df = None
+    processed_shapes_df = None
     if shapes_df is not None:
-        WranglerLogger.debug("Validating shapes_df against RoadShapesTable schema")
-        validated_shapes_df = validate_df_to_model(shapes_df, RoadShapesTable)
+        WranglerLogger.debug("Processing shapes_df through df_to_shapes_df")
+        processed_shapes_df = df_to_shapes_df(shapes_df)
 
-    # Create RoadwayNetwork with validated DataFrames
+    # Create RoadwayNetwork with processed DataFrames that have attrs set
     roadway_network = RoadwayNetwork(
-        links_df=validated_links_df,
-        nodes_df=validated_nodes_df,
-        shapes_df=validated_shapes_df,
+        links_df=processed_links_df,
+        nodes_df=processed_nodes_df,
+        shapes_df=processed_shapes_df,
         config=config,
     )
 
