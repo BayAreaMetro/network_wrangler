@@ -85,16 +85,6 @@ MAX_DISTANCE_STOP = {
 }
 """Maximum distance for a stop to match to a node."""
 
-MAX_DISTANCE_SHAPE = {
-    'feet': 100,
-    'meters': 30,
-}
-"""Maximum distance for a shape node to match to a node.
-
-This is much smaller because shape nodes will often be mid-block and we don't need to keep all of those.
-"""
-
-
 def create_feed_frequencies(
     feed_tables: Dict[str, pd.DataFrame],
     timeperiods: Dict[str, Tuple[str, str]],
@@ -389,7 +379,7 @@ def create_feed_frequencies(
     feed_tables['stop_times'].drop(columns=[
         'orig_trip_id','arrival_time','departure_time', # not relevant for frequency-based trips
         'departure_minutes'
-    ])
+    ], inplace=True)
     WranglerLogger.debug(f"feed_tables['stop_times']:\n{feed_tables['stop_times']}")
 
 
@@ -2091,17 +2081,17 @@ def add_additional_data_to_shapes(
     matched_count = 0
 
     # Log shape information for some shape_ids for debugging
-    min_rows = pd.options.display.min_rows
+    pd_min_rows = pd.options.display.min_rows
     pd.options.display.min_rows = 600 
     import random
     random_shape_ids = random.sample(unique_shape_ids, 20)
-    # TEST
-    random_shape_ids.append('SF:9714:20231013')
+
     WranglerLogger.debug(f"Logging details for random_shape_ids={random_shape_ids}")
 
     # Make sure this is sorted by trip and then stop sequence
     feed_tables['stop_times'].sort_values(by=['trip_id','stop_sequence'], inplace=True)
 
+    # TODO: This is a little slow; modify to wholly vectorized?
     for shape_id in unique_shape_ids:
         # Get stop_times for this shape
         shape_stops_df = feed_tables['stop_times'][feed_tables['stop_times']['shape_id'] == shape_id]
@@ -2169,7 +2159,10 @@ def add_additional_data_to_shapes(
                           f'match_distance_{crs_units}', 'shape_pt_lon', 'shape_pt_lat']
             WranglerLogger.debug(f"\n{shape_df.loc[pd.notna(shape_df['stop_id']), debug_cols]}")
     
+    
     WranglerLogger.info("Finished adding stop information to shapes")
+    # revert to previous pd_min_rows
+    pd.options.display.min_rows = pd_min_rows 
 
 def add_stations_and_links_to_roadway_network(
     feed_tables: Dict[str, pd.DataFrame],
@@ -2181,8 +2174,12 @@ def add_stations_and_links_to_roadway_network(
     Add nodes first, then links.
     """
     WranglerLogger.info(f"Adding transit stations and station-based links to the roadway network")
-    WranglerLogger.debug(f"feed_tables['shapes']:\n{feed_tables['shapes']}")
-    WranglerLogger.debug(f"feed_tables['stops']:\n{feed_tables['stops']}")
+    WranglerLogger.debug(f"feed_tables['shapes'] type={type(feed_tables['shapes'])}:\n{feed_tables['shapes']}")
+    WranglerLogger.debug(f"feed_tables['stops'] type={type(feed_tables['stops'])}:\n{feed_tables['stops']}")
+    WranglerLogger.debug(f"feed_tables['stop_times'] type={type(feed_tables['stop_times'])}:\n{feed_tables['stop_times']}")
+
+    # TODO: Prepare new link list first
+    # For all consecutive stop_ids in feed_table['stop_times']
 
 def create_feed_from_gtfs_model(
     gtfs_model: GtfsModel,
