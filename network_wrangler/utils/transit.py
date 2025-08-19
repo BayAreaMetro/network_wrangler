@@ -95,15 +95,23 @@ This is much smaller because shape nodes will often be mid-block and we don't ne
 """
 
 
-def create_frequencies_from_stop_times(
+def create_feed_frequencies(
     feed_tables: Dict[str, pd.DataFrame],
-    time_periods: List[Dict[str, str]],
+    timeperiods: Dict[str, Tuple[str, str]],
+    frequency_method: str,
     default_frequency_for_onetime_route: int = 10800,
-) -> pd.DataFrame:
-    """Create a frequencies table from feed stop_times data.
+):
+    """Create a frequencies and convert GTFS-style tables to Wrangler-style Feed tables.
 
-    This function analyzes actual trip departure times in the feed data and calculates
-    average headways for each route pattern within specified time periods.
+    This function is used for converting a GtfsModel to a Feed object.
+    While a GtfsModel typically specifies each individual transit trip run as a
+    series of stop_times, the Wrangler Feed object assumes a simplified schedule:
+    a smaller set of trips and a set of headways or frequencies for those trips throughout
+    a timeperiod.
+
+    This function assumes that the GtfsModel's shape_id corresponds to a unique
+    route, trip, direction, and stop pattern, so these shape_ids will be used to determine
+    frequencies for its trips within each timeperiod.
 
     See [GTFS frequencies.txt](https://gtfs.org/documentation/schedule/reference/#frequenciestxt)
 
@@ -111,247 +119,278 @@ def create_frequencies_from_stop_times(
         feed_tables (Dict[str, pd.DataFrame]): Dictionary of feed tables including:
             - 'stop_times': Wrangler-formatted stop times table
             - 'trips': Trips table with route information
-        time_periods (List[Dict[str, str]]): List of time period definitions.
-            Each dict should have 'start_time' and 'end_time' keys.
-            Example: [{'start_time': '06:00:00', 'end_time': '10:00:00'}, ...]
+        timeperiods (Dict[str, Tuple[str, str]],): Dictionary of time period label to timespan for frequencies.
+            Example: { 'EA': ['03:00','06:00], ...]
+        frequency_method (str): one of 'uniform_headway', 'mean_headway' or 'median_headway'. 
+            This determines how the frequencies are calculated per timeperiod, after each trip
+            is assigned to a timeperiod based on the trip's departure time.
+            'uniform_headway' means the timeperiod_duration is divided by the number of trips.
+            The other two look at the time between trips during the timeperiod.
         default_frequency_for_onetime_route (int, optional): Default headway in seconds
             for routes with only one trip in a period. Defaults to 10800 (3 hours).
 
     Returns:
-        pd.DataFrame: Frequencies table with columns:
-
-            - trip_id: Template trip ID for this frequency entry
-            - start_time: Start time of the period
-            - end_time: End time of the period
-            - headway_secs: Average headway in seconds
-            - exact_times: Always 0 (frequency-based service)
+        None
 
     Notes:
-        - Groups trips by route and stop pattern to handle different service patterns
         - For routes with only one trip in a period, uses the default_frequency_for_onetime_route
         - Handles time periods that cross midnight (e.g., '19:00:00' to '03:00:00')
-        - Returns empty DataFrame if no frequency data can be calculated
+        - Creates feed_tables['frequencies'] to be compatible with a WranglerFrequenciesTable.
+        - Updates feed_tables['trips'] to correspond to the new trip definition, so each
+          trip is representative of a route/direction/shape (e.g. stop pattern).
+          The first occurance of this trip in the original list is assumed to be respresentative
+          for the other columns in this table.
     """
     WranglerLogger.info("Creating frequencies table from feed stop_times data")
 
-    stop_times_df = feed_tables["stop_times"]
-    trips_df = feed_tables["trips"]
+    VALID_FREQUENCY_METHOD = ["uniform_headway", "mean_headway", "median_headway" ]
+    if frequency_method not in VALID_FREQUENCY_METHOD:
+        raise ValueError(f"frequency_method must be on of {VALID_FREQUENCY_METHOD}; received {frequency_method}")
 
-    stop_times_df["departure_seconds"] = stop_times_df["departure_time"].apply(time_to_seconds)
-
-    # Get first stop for each trip to use as the reference time
-    first_stops = stop_times_df.groupby("trip_id")["departure_seconds"].min().reset_index()
-    first_stops.columns = ["trip_id", "first_departure_seconds"]
-
-    # Join with trips to get route info
-    trips_with_times = pd.merge(
-        first_stops, trips_df[["trip_id", "route_id"]], on="trip_id", how="left"
-    )
-
-    frequencies_data = []
-
-    # Get stop patterns for all trips to identify distinct patterns
-    # Note: In wrangler format, model_node_id is renamed to stop_id
-    stop_sequences = stop_times_df.groupby("trip_id")["stop_id"].apply(list).reset_index()
-    stop_sequences.columns = ["trip_id", "stop_sequence"]
-    stop_sequences["stop_pattern"] = stop_sequences["stop_sequence"].apply(
-        lambda x: ",".join(map(str, x))
-    )
-
-    # Join with trip times
-    trips_with_patterns = pd.merge(
-        trips_with_times, stop_sequences[["trip_id", "stop_pattern"]], on="trip_id", how="left"
-    )
-    WranglerLogger.debug(
-        f"create_frequencies_from_stop_times(): trips_with_patterns=\n{trips_with_patterns}"
-    )
-
-    # Process each route
-    for route_id, route_trips in trips_with_patterns.groupby("route_id"):
-        if len(route_trips) == 0:
-            WranglerLogger.debug(f"Route {route_id}: no trips found, skipping")
-            continue
-
-        # Find distinct stop patterns for this route
-        pattern_groups = route_trips.groupby("stop_pattern")
-        num_patterns = len(pattern_groups)
-
-        if num_patterns > 1:
-            WranglerLogger.debug(f"Route {route_id}: Found {num_patterns} distinct stop patterns")
-
-        # Process each pattern separately
-        for pattern_idx, (stop_pattern, pattern_trips) in enumerate(pattern_groups):
-            if len(pattern_trips) == 0:
-                continue
-
-            # Sort trips by departure time
-            pattern_trips = pattern_trips.sort_values("first_departure_seconds")
-            departures = pattern_trips["first_departure_seconds"].values
-
-            # Use first trip of this pattern as template
-            template_trip_id = pattern_trips.iloc[0]["trip_id"]
-
-            # Log pattern info
-            num_stops = len(stop_pattern.split(","))
-            WranglerLogger.debug(
-                f"Route {route_id} pattern {pattern_idx + 1}/{num_patterns}: {len(pattern_trips)} trips, {num_stops} stops, template trip {template_trip_id}"
-            )
-
-            # Calculate headways for each time period
-            for period in time_periods:
-                start_seconds = time_to_seconds(period["start_time"])
-                end_seconds = time_to_seconds(period["end_time"])
-
-                # Handle periods that cross midnight
-                if end_seconds <= start_seconds:
-                    # Period crosses midnight
-                    period_departures = departures[
-                        (departures >= start_seconds) | (departures < end_seconds)
-                    ]
-                else:
-                    # Normal period
-                    period_departures = departures[
-                        (departures >= start_seconds) & (departures < end_seconds)
-                    ]
-
-                if len(period_departures) == 0:
-                    # WranglerLogger.debug(
-                    #     f"Route {route_id} pattern {pattern_idx + 1}: no departures in period {period['start_time']}-{period['end_time']}, skipping"
-                    #)
-                    continue
-                if len(period_departures) == 1:
-                    # For single trip, use default headway
-                    avg_headway = default_frequency_for_onetime_route
-                    WranglerLogger.debug(
-                        f"Route {route_id} pattern {pattern_idx + 1}: only 1 departure in period {period['start_time']}-{period['end_time']}, using default {default_frequency_for_onetime_route / 3600:.1f}-hour headway"
-                    )
-                else:
-                    # Calculate average headway for multiple trips
-                    headways = np.diff(np.sort(period_departures))
-                    avg_headway = int(np.mean(headways))
-                    WranglerLogger.debug(
-                        f"Route {route_id} pattern {pattern_idx + 1}: {len(period_departures)} departure in period {period['start_time']}-{period['end_time']}, period_departures={period_departures} headways={headways} avg_headway={avg_headway}"
-                    )
-                    # this can happen if there are two trips and they leave at the same times
-                    if avg_headway == 0:
-                        avg_headway = default_frequency_for_onetime_route
-
-                frequencies_data.append(
-                    {
-                        "trip_id": template_trip_id,
-                        "start_time": period["start_time"],
-                        "end_time": period["end_time"],
-                        "headway_secs": avg_headway,
-                        "exact_times": 0,
-                    }
-                )
-
-                WranglerLogger.debug(
-                    f"Route {route_id} pattern {pattern_idx + 1} period {period['start_time']}-{period['end_time']}: {len(period_departures)} trips, avg headway {avg_headway // 60:.1f} min"
-                )
-
-    if frequencies_data:
-        frequencies_df = pd.DataFrame(frequencies_data)
-        WranglerLogger.info(
-            f"Created frequencies table with {len(frequencies_df)} entries from stop_times data"
-        )
-        WranglerLogger.debug(
-            f"frequencies_df.loc[frequencies_df.trip_id=='AC:11539040:20231031']:\n{frequencies_df.loc[frequencies_df.trip_id == 'AC:11539040:20231031']}"
-        )
-        WranglerLogger.debug(
-            f"feed_tables['trips'].loc[ feed_tables['trips'].trip_id=='AC:11539040:20231031']:\n{feed_tables['trips'].loc[feed_tables['trips'].trip_id == 'AC:11539040:20231031']}"
-        )
-        WranglerLogger.debug(f"feed_tables['stop_times']:\n{feed_tables['stop_times']}")
-        return frequencies_df
-    WranglerLogger.warning("No frequency data could be calculated from stop_times")
-    return pd.DataFrame()
-
-
-def analyze_frequency_coverage(
-    gtfs_model: GtfsModel, frequencies_df: pd.DataFrame
-) -> pd.DataFrame:
-    """Analyze how well template trips in frequencies table cover all trips.
-
-    Args:
-        gtfs_model (GtfsModel): GTFS model with trips and stop_times data
-        frequencies_df (pd.DataFrame): Frequencies table with template trip_ids
-
-    Returns:
-        pd.DataFrame: Coverage statistics by route with columns:
-            - route_id: Route identifier
-            - total_trips: Total number of trips for the route
-            - total_patterns: Total number of distinct stop patterns
-            - covered_patterns: Number of patterns covered by template trips
-            - covered_trips: Number of trips covered by template patterns
-            - coverage_pct: Percentage of trips covered
-    """
-    # Get stop patterns for all trips
-    stop_sequences = gtfs_model.stop_times.groupby("trip_id")["stop_id"].apply(list).reset_index()
-    stop_sequences.columns = ["trip_id", "stop_sequence"]
-    stop_sequences["stop_pattern"] = stop_sequences["stop_sequence"].apply(lambda x: ",".join(x))
-
-    # Get all trips and their patterns
-    all_trip_patterns = pd.merge(
-        gtfs_model.trips[["trip_id", "route_id"]],
-        stop_sequences[["trip_id", "stop_pattern"]],
-        on="trip_id",
-        how="left",
-    )
-
-    # Get template trips and their patterns
-    template_trip_patterns = all_trip_patterns[
-        all_trip_patterns["trip_id"].isin(frequencies_df["trip_id"].unique())
-    ]
-
-    # Analyze coverage by route
-    coverage_stats = []
-    for route_id in all_trip_patterns["route_id"].unique():
-        route_all_trips = all_trip_patterns[all_trip_patterns["route_id"] == route_id]
-        route_template_trips = template_trip_patterns[
-            template_trip_patterns["route_id"] == route_id
+    # convert timeperiods to { timeperiod_label: [start_time, end_time]} where times are in minutes from midnight
+    timeperiod_minutes_after_midnight = {}
+    for label in timeperiods.keys():
+        timeperiod_minutes_after_midnight[label] = [
+            time_to_seconds(f"{timeperiods[label][0]}:00")/60.0,
+            time_to_seconds(f"{timeperiods[label][1]}:00")/60.0,
         ]
+    # sort by the start_time of the timeperiod
+    WranglerLogger.debug(f"timeperiod_minutes_after_midnight:\n{timeperiod_minutes_after_midnight}")
 
-        total_trips = len(route_all_trips)
-        total_patterns = route_all_trips["stop_pattern"].nunique()
-        covered_patterns = route_template_trips["stop_pattern"].nunique()
-
-        # Count trips covered by template patterns
-        covered_trip_count = route_all_trips[
-            route_all_trips["stop_pattern"].isin(route_template_trips["stop_pattern"])
-        ]["trip_id"].nunique()
-
-        coverage_pct = (covered_trip_count / total_trips * 100) if total_trips > 0 else 0
-
-        coverage_stats.append(
-            {
-                "route_id": route_id,
-                "total_trips": total_trips,
-                "total_patterns": total_patterns,
-                "covered_patterns": covered_patterns,
-                "covered_trips": covered_trip_count,
-                "coverage_pct": coverage_pct,
-            }
-        )
-
-        if covered_patterns < total_patterns:
-            WranglerLogger.warning(
-                f"Route {route_id}: {covered_patterns}/{total_patterns} stop patterns covered by template trips ({coverage_pct:.1f}% of trips)"
-            )
-
-    # Summary statistics
-    coverage_df = pd.DataFrame(coverage_stats)
-    avg_coverage = coverage_df["coverage_pct"].mean()
-    routes_with_incomplete_coverage = len(coverage_df[coverage_df["coverage_pct"] < 100])
-
-    WranglerLogger.info(
-        f"Pattern coverage summary: {avg_coverage:.1f}% average trip coverage across all routes"
+    # Add route_id, direction_id, and shape_id to stop_times
+    feed_tables["stop_times"] = pd.merge(
+        left=feed_tables["stop_times"],
+        right=feed_tables["trips"][["trip_id","shape_id","direction_id","route_id"]].drop_duplicates(),
+        how="left",
+        validate="many_to_one"
     )
-    if routes_with_incomplete_coverage > 0:
-        WranglerLogger.warning(
-            f"{routes_with_incomplete_coverage} routes have incomplete pattern coverage"
-        )
+    # Add departure_minutes, which is departure_time in minutes after midnight (easier to read than seconds)
+    feed_tables["stop_times"]["departure_minutes"] = feed_tables["stop_times"]["departure_time"].apply(time_to_seconds)
+    feed_tables["stop_times"]["departure_minutes"] = feed_tables["stop_times"]["departure_minutes"]/60.0 # convert to minutes
+    feed_tables["stop_times"]["departure_minutes"] = feed_tables["stop_times"]["departure_minutes"].round(decimals=0)
+    WranglerLogger.debug(f"feed_tables['stop_times']:\n{feed_tables['stop_times']}")
 
-    return coverage_df
+    # In GTFS, each trip_id is a vehicle trip with a single set of times for the stops.
+    # In NetworkWrangler, each trip is a set of vehicle trips with a frequency per time period.
+    # Assuming that the GTFS data includes shape_ids, which follow the shape of a route/direction,
+    # we'll transform shape_ids to be the new trip_id, and determine frequencies for them
+    WranglerLogger.info(f"There are {feed_tables['stop_times']['shape_id'].nunique():,} unique shape_ids.")
+    WranglerLogger.info(f"These will serve as our new trip_ids.")
+
+    # Check that stop patterns are the same for all trips for a given route_id, direction_id, shape_id
+    # Group by trip_id and get ordered stop sequences
+    stop_patterns_df = (
+        feed_tables["stop_times"]
+        .sort_values(['trip_id', 'stop_sequence'])
+        .groupby('trip_id')
+    ).aggregate(
+        trip_depart_time = pd.NamedAgg(column='departure_minutes', aggfunc='first'),
+        stop_pattern     = pd.NamedAgg(column='stop_id', aggfunc=list)
+    ).reset_index(drop=False)
+    WranglerLogger.debug(f"stop_patterns_df:\n{stop_patterns_df}")
+    # columns are trip_id, trip_depart_time, stop_pattern
+
+    # Merge with trips to get route_id, direction_id, shape_id
+    stop_patterns_df = pd.merge(
+        stop_patterns_df,
+        feed_tables["trips"][['trip_id', 'route_id', 'direction_id', 'shape_id']].drop_duplicates(),
+        on='trip_id',
+        how='left',
+        validate='one_to_one'
+    )
+    # Assign each trip to a timeperiod using the label
+    # And calculate timeperiod_duration_minutes 
+    timeperiod_duration_minutes = {}
+    stop_patterns_df['timeperiod'] = 'not_set'
+    for timeperiod in timeperiod_minutes_after_midnight.keys():
+        # for the time period, in minutes after midnight
+        start_time = timeperiod_minutes_after_midnight[timeperiod][0]
+        end_time   = timeperiod_minutes_after_midnight[timeperiod][1]
+
+        assert(start_time >= 0)
+        assert(start_time < 24*60)
+        assert(end_time >= 0)
+        assert(end_time < 24*60)
+        assert(start_time != end_time)
+        # doesn't roll over midnight
+        if start_time < end_time:
+            stop_patterns_df.loc[ 
+                (stop_patterns_df['trip_depart_time'] >= start_time) & 
+                (stop_patterns_df['trip_depart_time'] < end_time),
+                 'timeperiod' ] = timeperiod
+            timeperiod_duration_minutes[timeperiod] = end_time - start_time
+        # rolls over
+        else:
+            stop_patterns_df.loc[ 
+                (stop_patterns_df['trip_depart_time'] >= start_time) |
+                (stop_patterns_df['trip_depart_time'] < end_time),
+                 'timeperiod' ] = timeperiod
+            timeperiod_duration_minutes[timeperiod] = ((24*60) - start_time) + (end_time)
+
+    WranglerLogger.debug(f"timeperiod_duration_minutes: {timeperiod_duration_minutes}")
+
+    # Make sure all trips are assigned
+    WranglerLogger.debug(f"trip_id by timeperiod:\n{stop_patterns_df['timeperiod'].value_counts()}")
+    assert(len(stop_patterns_df.loc[ stop_patterns_df.timeperiod=='not_set']) == 0)
+
+    WranglerLogger.debug(f"stop_patterns_df:\n{stop_patterns_df}")
+    #                   trip_id  trip_depart_time                                       stop_pattern route_id direction_id           shape_id timeperiod
+    # 0        3D:1090:20230930            261.00  [811425, 810752, 810747, 819910, 810641, 81063...  3D:300X            1     3D:35:20230930         EA
+    # 1        3D:1091:20230930            321.00  [811425, 810752, 810747, 819910, 810641, 81063...  3D:300X            1     3D:35:20230930         EA
+    # 2        3D:1092:20230930            381.00  [811425, 810752, 810747, 819910, 810641, 81063...  3D:300X            1     3D:35:20230930         AM
+    # 3        3D:1093:20230930            438.00  [817028, 812735, 812719, 817899, 814801, 81454...   3D:391            0     3D:51:20230930         AM
+    # 4        3D:1094:20230930            542.00  [817754, 813644, 811043, 819910, 810948, 81093...  3D:300X            0     3D:36:20230930         AM
+
+    # First, group without timeperiods to make sure there is one shape_id per route_id and direction_id
+    shape_per_route_dir_df = stop_patterns_df.groupby(by=['route_id','direction_id','shape_id']).aggregate(
+        num_trip_ids      = pd.NamedAgg(column='trip_id',          aggfunc='nunique'),
+        trip_ids          = pd.NamedAgg(column='trip_id',          aggfunc=list),
+        first_trip_id     = pd.NamedAgg(column='trip_id',          aggfunc='first'),
+        trip_depart_time  = pd.NamedAgg(column='trip_depart_time', aggfunc=list),
+        stop_pattern      = pd.NamedAgg(column='stop_pattern',     aggfunc='first')
+    ).reset_index(drop=False)
+    # drop lines with no relationship between shape_id and the stop_pattern
+    shape_per_route_dir_df = shape_per_route_dir_df.loc[ shape_per_route_dir_df.stop_pattern.notna() ].reset_index(drop=True)
+    WranglerLogger.debug(f"shape_per_route_dir_df:\n{shape_per_route_dir_df}")
+
+    # Check if there are shape_ids that appears for more than one (e.g. one shape_id for 1+ unique route_id, direction_id)
+    # This is what showed that 'PE:t263-sl17-p182-r1A:20230930' appears to have the wrong direction_id
+    shape_id_multiple_rows = shape_per_route_dir_df.loc[ shape_per_route_dir_df.duplicated(subset='shape_id', keep=False) ]
+    if len(shape_id_multiple_rows) > 0:
+        WranglerLogger.error(f"shape_id_multiple_rows:\n{shape_id_multiple_rows}")
+        # Hopefully there are none!
+        assert(len(shape_id_multiple_rows) == 0)
+
+    # Use shape_per_route_dir_df to create a mapping from the new trip_id (shape_id + '_trip') and 
+    # the representative (first) orig_trip_id
+    new_old_trip_id_df = shape_per_route_dir_df[['shape_id','first_trip_id']]
+    new_old_trip_id_df['trip_id'] = new_old_trip_id_df['shape_id'] + '_trip'
+    new_old_trip_id_df.rename(columns={'first_trip_id':'orig_trip_id'}, inplace=True)
+    new_old_trip_id_df.drop(columns=['shape_id'], inplace=True)
+    WranglerLogger.debug(f"new_old_trip_id_df:\n{new_old_trip_id_df}")
+
+    # Now, groupby route_id, direction_id, shape_id, timeperiod and count unique trip_ids, stop_patterns
+    shape_patterns_df = stop_patterns_df.groupby(by=['route_id','direction_id','shape_id','timeperiod']).aggregate(
+        num_trip_ids      = pd.NamedAgg(column='trip_id',          aggfunc='nunique'),
+        trip_ids          = pd.NamedAgg(column='trip_id',          aggfunc=list),
+        trip_depart_time  = pd.NamedAgg(column='trip_depart_time', aggfunc=lambda x: sorted(list(x))),
+        stop_pattern      = pd.NamedAgg(column='stop_pattern',     aggfunc='first')
+    ).reset_index(drop=False)
+    # WranglerLogger.debug(f"shape_patterns_df:\n{shape_patterns_df}")
+
+    # drop lines with no relationship between shape_id and the stop_pattern
+    shape_patterns_df = shape_patterns_df.loc[ shape_patterns_df.stop_pattern.notna() ].reset_index(drop=True)
+    WranglerLogger.debug(f"shape_patterns_df:\n{shape_patterns_df}")
+    #      route_id direction_id           shape_id timeperiod  num_trip_ids                                           trip_ids        trip_depart_time                                       stop_pattern
+    # 0     3D:200X            0     3D:83:20230930         AM             3  [3D:1118:20230930, 3D:1130:20230930, 3D:1166:2...   [445.0, 505.0, 588.0]  [819191, 818955, 819209, 813979, 814568, 81399...
+    # 1     3D:200X            0     3D:83:20230930         PM             3  [3D:1100:20230930, 3D:1354:20230930, 3D:1430:2...  [912.0, 972.0, 1032.0]  [819191, 818955, 819209, 813979, 814568, 81399...
+    # 2     3D:200X            1     3D:82:20230930         AM             3  [3D:1117:20230930, 3D:1129:20230930, 3D:1165:2...   [380.0, 440.0, 520.0]  [818889, 816287, 816481, 819221, 819213, 81456...
+    # 3     3D:200X            1     3D:82:20230930         MD             1                                 [3D:1099:20230930]                 [856.0]  [818889, 816287, 816481, 819221, 819213, 81456...
+    # 4     3D:200X            1     3D:82:20230930         PM             2               [3D:1353:20230930, 3D:1429:20230930]          [916.0, 976.0]  [818889, 816287, 816481, 819221, 819213, 81456...
+    
+    # Determine frequencies for the shape_id, timeperiod
+    # if num_trip_ids == 1, use default_frequency_for_onetime_route
+    # if num_trip_ids > 1, we can use:
+    #    timeperiod duration / num_trip_ids OR
+    #    mean time between trip_depart_times OR
+    #    median time between trip_depar_times
+    # Let's set all of those
+
+    shape_patterns_df['timeperiod_duration_minutes'] = shape_patterns_df['timeperiod'].map(timeperiod_duration_minutes)
+    shape_patterns_df['uniform_headway'] = shape_patterns_df['timeperiod_duration_minutes'] / shape_patterns_df['num_trip_ids']
+
+    # Mean of differences (as integers)
+    shape_patterns_df['mean_headway'] = shape_patterns_df['trip_depart_time'].apply(
+        lambda x: int(np.mean(np.diff(x))) if len(x) > 1 else None
+    ) 
+
+    # Median of differences (as integers)
+    shape_patterns_df['median_headway'] = shape_patterns_df['trip_depart_time'].apply(
+        lambda x: int(np.median(np.diff(x))) if len(x) > 1 else None
+    )
+
+    # set it based on frequency_method argument
+    shape_patterns_df['headway_mins'] = shape_patterns_df[frequency_method]
+    # Make it default_frequency_for_onetime_route if needed
+    shape_patterns_df.loc[ shape_patterns_df["num_trip_ids"] <= 1, 'headway_mins'] = default_frequency_for_onetime_route
+    WranglerLogger.debug(f"After calculating different versions of headways, shape_patterns_df:\n{shape_patterns_df}")
+
+    #      route_id direction_id           shape_id timeperiod  num_trip_ids                                           trip_ids         trip_depart_time                                       stop_pattern  timeperiod_duration_minutes  uniform_headway  mean_headway  median_headway  headway_mins
+    # 0     3D:200X            0     3D:83:20230930         AM             3  [3D:1118:20230930, 3D:1130:20230930, 3D:1166:2...    [445.0, 505.0, 588.0]  [819191, 818955, 819209, 813979, 814568, 81399...                       240.00            80.00         71.00           71.00         71.00
+    # 1     3D:200X            0     3D:83:20230930         PM             3  [3D:1100:20230930, 3D:1354:20230930, 3D:1430:2...   [912.0, 972.0, 1032.0]  [819191, 818955, 819209, 813979, 814568, 81399...                       240.00            80.00         60.00           60.00         60.00
+    # 2     3D:200X            1     3D:82:20230930         AM             3  [3D:1117:20230930, 3D:1129:20230930, 3D:1165:2...    [380.0, 440.0, 520.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       240.00            80.00         70.00           70.00         70.00
+    # 3     3D:200X            1     3D:82:20230930         MD             1                                 [3D:1099:20230930]                  [856.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       300.00           300.00           NaN             NaN      10800.00
+    # 4     3D:200X            1     3D:82:20230930         PM             2               [3D:1353:20230930, 3D:1429:20230930]           [916.0, 976.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       240.00           120.00         60.00           60.00         60.00
+
+    # trip_id is now the same as shape_id (but let's add suffix '_trip')
+    # Create feed_tables['frequencies'] compatible with WranglerFrequenciesTable
+    timeperiod_start_times = {period: times[0] for period, times in timeperiods.items()}
+    timeperiod_end_times   = {period: times[1] for period, times in timeperiods.items()}
+    WranglerLogger.debug(f"timeperiod_start_times:\n{timeperiod_start_times}")
+
+    shape_patterns_df['trip_id'] = shape_patterns_df['shape_id'] + '_trip'
+    shape_patterns_df['start_time'] = shape_patterns_df['timeperiod'].map(timeperiod_start_times)
+    shape_patterns_df['end_time'] = shape_patterns_df['timeperiod'].map(timeperiod_end_times)
+    shape_patterns_df['headway_secs'] = shape_patterns_df['headway_mins']*60
+    WranglerLogger.debug(f"shape_patterns_df:\n{shape_patterns_df}")
+    #      route_id direction_id           shape_id timeperiod  num_trip_ids                                           trip_ids          trip_depart_time                                       stop_pattern  timeperiod_duration_minutes  uniform_headway  mean_headway  median_headway  headway_mins                 trip_id start_time end_time  headway_secs
+    # 0     3D:200X            0     3D:83:20230930         AM             3  [3D:1118:20230930, 3D:1130:20230930, 3D:1166:2...     [445.0, 505.0, 588.0]  [819191, 818955, 819209, 813979, 814568, 81399...                       240.00            80.00         71.00           71.00         71.00     3D:83:20230930_trip      06:00    10:00       4260.00
+    # 1     3D:200X            0     3D:83:20230930         PM             3  [3D:1100:20230930, 3D:1354:20230930, 3D:1430:2...    [912.0, 972.0, 1032.0]  [819191, 818955, 819209, 813979, 814568, 81399...                       240.00            80.00         60.00           60.00         60.00     3D:83:20230930_trip      15:00    19:00       3600.00
+    # 2     3D:200X            1     3D:82:20230930         AM             3  [3D:1117:20230930, 3D:1129:20230930, 3D:1165:2...     [380.0, 440.0, 520.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       240.00            80.00         70.00           70.00         70.00     3D:82:20230930_trip      06:00    10:00       4200.00
+    # 3     3D:200X            1     3D:82:20230930         MD             1                                 [3D:1099:20230930]                   [856.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       300.00           300.00           NaN             NaN      10800.00     3D:82:20230930_trip      10:00    15:00     648000.00
+    # 4     3D:200X            1     3D:82:20230930         PM             2               [3D:1353:20230930, 3D:1429:20230930]            [916.0, 976.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       240.00           120.00         60.00           60.00         60.00     3D:82:20230930_trip      15:00    19:00       3600.00
+
+    feed_tables['frequencies'] = shape_patterns_df[['trip_id','start_time','end_time','headway_secs']]
+    WranglerLogger.debug(f"feed_tables['frequencies']:\n{feed_tables['frequencies']}")
+
+    # Update feed_tables['trips'] to be a WranglerTripsTable
+    # Only one trip_id per shape_id, so drop the remaining trip_ids
+    feed_tables['trips'].rename(columns={'trip_id':'orig_trip_id'}, inplace=True)
+    feed_tables['trips']['trip_id'] = feed_tables['trips']['shape_id'] + '_trip'
+    # make trip_id unique
+    TRIP_TABLE_COLUMNS = [
+        'shape_id','direction_id','service_id','route_id','trip_short_name',
+        'trip_headsign','block_id','wheelchair_accessible','bikes_allowed'
+    ]
+    aggregate_dict = {}
+    for colname in TRIP_TABLE_COLUMNS:
+        if colname not in feed_tables['trips'].columns: continue
+        aggregate_dict[colname       ] = pd.NamedAgg(column=colname, aggfunc='first')
+        aggregate_dict[f"{colname}_n"] = pd.NamedAgg(column=colname, aggfunc='nunique')
+
+
+    feed_tables['trips'] = feed_tables['trips'].groupby('trip_id').agg(**aggregate_dict)
+    # move trip_id back to regular column from index
+    feed_tables['trips'].reset_index(drop=False, inplace=True)
+    WranglerLogger.debug(
+        f"After aggregating to new shape_id version of trip_id, "
+        f"feed_tables['trips']:\n{feed_tables['trips']}"
+    )
+    # Log summary
+    WranglerLogger.debug(
+        f"After aggregating to new shape_id version of trip_id, "
+        f"feed_tables['trips'].describe():\n{feed_tables['trips'].describe()}"
+    )
+    feed_tables['trips'] = feed_tables['trips'][['trip_id'] + TRIP_TABLE_COLUMNS]
+    WranglerLogger.debug(f"feed_tables['trips']:\n{feed_tables['trips']}")
+
+    # Update feed_tables['stop_times'] to be a WranglerStopTimesTable
+    feed_tables['stop_times'].rename(columns={'trip_id':'orig_trip_id'}, inplace=True)
+    feed_tables['stop_times']['trip_id'] = feed_tables['stop_times']['shape_id'] + '_trip'
+    WranglerLogger.debug(f"Before trimming, feed_tables['stop_times']:\n{feed_tables['stop_times']}")
+    # There are stop_times for every original trip_id but we have fewer now, so filter out the extra
+    feed_tables['stop_times'] = pd.merge(
+        left=feed_tables['stop_times'],
+        right=new_old_trip_id_df, # trip_id, orig_trip_id
+        on=['trip_id','orig_trip_id'],
+        how='inner',
+    )
+    # drop columns no long relevant
+    feed_tables['stop_times'].drop(columns=[
+        'orig_trip_id','arrival_time','departure_time', # not relevant for frequency-based trips
+        'departure_minutes'
+    ])
+    WranglerLogger.debug(f"feed_tables['stop_times']:\n{feed_tables['stop_times']}")
 
 
 def build_transit_graph(transit_links_df: pd.DataFrame) -> Dict[int, set]:
@@ -1562,7 +1601,9 @@ def create_feed_shapes(
     pd.options.display.min_rows = 600 
     import random
     random_shape_ids = random.sample(unique_shape_ids, 20)
-    WranglerLogger.debug(f"Logging details for {random_shape_ids}")
+    # TEST 
+    random_shape_ids.append('SF:9714:20231013')
+    WranglerLogger.debug(f"Logging details for random_shape_ids={random_shape_ids}")
     
     for shape_id in unique_shape_ids:
         # Get all stops that use this shape
@@ -2026,14 +2067,135 @@ def create_feed_shapes(
     # feed_tables['shapes'].set_crs(LAT_LON_CRS, inplace=True)
     WranglerLogger.debug(f"create_feed_shapes() complete; feed_tables['shapes']:\n{feed_tables['shapes']}")    
 
+def add_agency_route_direction_shape_data_to_stops(
+    feed_tables: Dict[str, pd.DataFrame],
+):
+    """Updates feed_tables['stops'] with additional metadata about those stops.
+
+    Adds the following columns to feed_tables['stops']:
+   
+    - agency_ids (list of str)
+    - agency_names (list of str)
+    - route_ids (list of str)
+    - route_names (list of str)
+    - route_types (list of int)
+    - route_dir_shape_ids (list of tuples (route_id, direction_id, shape_id))
+    - stop_in_mixed_traffic (bool): True if any route_type associated with the stop is one of
+      MIXED_TRAFFIC_ONLY_ROUTE_TYPES
+    - is_parent (bool): True of another stop refers to this as their parent_station
+    - child_stop_in_mixed_traffic (bool): True iff any of the child stops has 
+      stop_in_mixed_traffic == True
+    """
+
+    # Add information about agencies, routes, directions and shapes to stops
+    # Join stop_times with trips and routes
+    stop_trips = pd.merge(
+        feed_tables["stop_times"][["stop_id", "trip_id"]].drop_duplicates(),
+        feed_tables["trips"][["trip_id", "direction_id", "route_id", "shape_id"]],
+        on="trip_id",
+        how="left",
+    )
+    WranglerLogger.debug(f"After joining stop_times with trips: {len(stop_trips):,} records")
+
+    # Create stop to route, agency mapping with direction information
+    stop_agencies = pd.merge(
+        stop_trips, 
+        feed_tables["routes"][["route_id", "agency_id", "route_short_name", "route_type"]], 
+        on="route_id", 
+        how="left"
+    )[["stop_id", "agency_id", "route_id", "direction_id", "shape_id", "route_short_name","route_type"]].drop_duplicates()
+    WranglerLogger.debug(f"stop_agencies.head():\n{stop_agencies.head()}")
+
+    # pick up agency information
+    stop_agencies = pd.merge(
+        stop_agencies,
+        feed_tables["agencies"][["agency_id", "agency_name"]],
+        on="agency_id",
+        how="left"
+    )
+    WranglerLogger.debug(f"stop_agencies.head():\n{stop_agencies.head()}")
+    
+    # Group by stop to get all agencies and routes serving each stop
+    # Now including route_dir_ids as list of (route_id, direction_id) tuples
+    stop_agency_info = stop_agencies.groupby("stop_id").agg({
+        "agency_id": lambda x: list(x.dropna().unique()),
+        "agency_name": lambda x: list(x.dropna().unique()) if x.notna().any() else [],
+        "route_id": lambda x: list(x.dropna().unique()),
+        "route_short_name": lambda x: list(x.dropna().unique()),
+        "route_type": lambda x: list(x.dropna().unique()),
+    }).reset_index()
+    
+    # Add route_dir_shape_ids as list of unique (route_id, direction_id) tuples
+    route_dir_shape_info = stop_agencies.groupby("stop_id").apply(
+        lambda x: list(x[["route_id", "direction_id", "shape_id"]].drop_duplicates().itertuples(index=False, name=None))
+    ).reset_index()
+    route_dir_shape_info.columns = ["stop_id", "route_dir_shape_ids"]
+    WranglerLogger.debug(f"route_dir_shape_info:\n{route_dir_shape_info}")
+    
+    # Merge route_dir_ids with other stop info
+    stop_agency_info = pd.merge(stop_agency_info, route_dir_shape_info, on="stop_id", how="left")
+    
+    stop_agency_info.columns = ["stop_id", "agency_ids", "agency_names", "route_ids", "route_names", "route_types", "route_dir_shape_ids"]
+    stop_agency_info["stop_in_mixed_traffic"] = stop_agency_info["route_types"].apply(
+        lambda x: any(rt in MIXED_TRAFFIC_ONLY_ROUTE_TYPES for rt in x) if x else False
+    )  # A stop is in mixed traffic if it serves MIXED_TRAFFIC_ONLY_ROUTE_TYPES
+
+    # columns: stop_id (str), agency_ids (list of str), agency_names (list of str), 
+    #   route_ids (list of str), route_names (list of str), route_types (list of int), 
+    #   route_dir_shape_ids (list of tuples (route_id, direction_id, shape_id)), stop_in_mixed_traffic (bool)
+    WranglerLogger.debug(f"stop_agency_info.head():\n{stop_agency_info.head()}")
+
+    # Merge this information back to stops
+    feed_tables["stops"] = pd.merge(
+        feed_tables["stops"], stop_agency_info, on="stop_id", how="left"
+    )
+
+    # Handle parent stations that may not be included in trips
+    # For these, set child_stop_in_mixed_traffic if any of the child stops has stop_in_mixed_traffic == True
+    if "parent_station" in feed_tables["stops"].columns:
+        # Create a subset of child stops with their parent_station and stop_in_mixed_traffic status
+        child_stops = feed_tables["stops"][feed_tables["stops"]["parent_station"].notna() & (feed_tables["stops"]["parent_station"] != "")][
+            ["parent_station", "stop_in_mixed_traffic"]
+        ]
+        
+        if len(child_stops) > 0:
+            # Group by parent_station and check if any child is in mixed traffic
+            parent_mixed_traffic = child_stops.groupby("parent_station")["stop_in_mixed_traffic"].any().reset_index()
+            parent_mixed_traffic.columns = ["stop_id", "child_stop_in_mixed_traffic"]
+            parent_mixed_traffic["is_parent"] = True
+            WranglerLogger.debug(f"parent_mixed_traffic:\n{parent_mixed_traffic}")
+            
+            # Merge back to the main dataframe
+            feed_tables["stops"] = feed_tables["stops"].merge(
+                parent_mixed_traffic,
+                on="stop_id",
+                how="left"
+            )
+            
+            # Fill NaN values with False (stops that are not parent stations)
+            feed_tables["stops"]["is_parent"].fillna(value=False, inplace=True)
+            feed_tables["stops"]["child_stop_in_mixed_traffic"].fillna(value=False, inplace=True)
+            
+            # Log parent stations with child stops in mixed traffic
+            WranglerLogger.debug(
+                f"Parent stations with mixed traffic children:\n" + \
+                f"{feed_tables['stops'].loc[feed_tables['stops']['child_stop_in_mixed_traffic'] == True, ['stop_id', 'stop_name', 'child_stop_in_mixed_traffic']]}"
+            )
+    else:
+        feed_tables["stops"]["is_parent"] = False
+        feed_tables["stops"]["child_stop_in_mixed_traffic"] = False
+    
+    WranglerLogger.debug(f"add_agency_route_direction_shape_data_to_stops() completed. feed_tables['stops']:\n{feed_tables['stops']}")
 
 def create_feed_from_gtfs_model(
     gtfs_model: GtfsModel,
     roadway_net: RoadwayNetwork,
     local_crs: str,
     crs_units: str,
-    time_periods: Optional[List[Dict[str, str]]] = None,
+    timeperiods: Dict[str, Tuple[str, str]],
+    frequency_method: str,
     default_frequency_for_onetime_route: int = 10800,
+    add_stations_and_links: bool = True,
     skip_stop_agencies: Optional[List[str]] = None,
 ) -> Feed:
     """Converts a GTFS feed to a Wrangler Feed object compatible with the given RoadwayNetwork.
@@ -2050,14 +2212,17 @@ def create_feed_from_gtfs_model(
         gtfs_model (GtfsModel): Standard GTFS model to convert
         roadway_net (RoadwayNetwork): RoadwayNetwork to map stops to. The nodes_df will be
             modified in place to add transit accessibility attributes.
-        time_periods (Optional[List[Dict[str, str]]]): List of time period definitions for frequencies.
-            Each dict should have 'start_time' and 'end_time' keys.
-            Example: [{'start_time': '03:00:00', 'end_time': '06:00:00'}, ...]
-            If None, frequencies table will not be created from stop_times.
         local_crs: Local coordinate reference system for projection, for calculating distances in feet or meters
         crs_units: distance measurement for local_crs, "feet" or "meters"
+        timeperiods (Dict[str, Tuple[str, str]],): Dictionary of time period label to timespan for frequencies.
+            Example: { 'EA': ['03:00','06:00], ...]
+        frequency_method (str): one of 'uniform_headway', 'mean_headway' or 'median_headway'. 
+            See create_feed_frequencies() for more details.
         default_frequency_for_onetime_route (int, optional): Default headway in seconds
             for routes with only one trip in a period. Defaults to 10800 (3 hours).
+        add_stations_and_links: (bool) If True, adds these stops and links to the raoday_net for
+            route_types in STATION_ROUTE_TYPES. Recommend doing this because matching is a hassle!
+            False is not currently implemented.
         skip_stop_agencies (Optional[List[str]]): List of agency IDs that use skip-stop patterns.
             Only these agencies will have skip-stop detection applied when creating shapes 
             for station-only route types.
@@ -2075,18 +2240,7 @@ def create_feed_from_gtfs_model(
     if crs_units not in ["feet","meters"]:
         raise ValueError(f"crs_units must be on of 'feet' or 'meters'; received {crs_units}")
 
-    # Start with the tables from the GTFS model
-    feed_tables = {}
-
-    # Copy over standard tables that don't need modification
-    # GtfsModel guarantees routes and trips exist
-    feed_tables["routes"] = gtfs_model.routes
-    feed_tables["trips"] = gtfs_model.trips
-    feed_tables["agencies"] = gtfs_model.agency # feed calls this agencies
-    feed_tables["stops"] = gtfs_model.stops.copy() # create a copy of this which we'll manipulate
-
-    # Get all nodes and links for spatial matching
-    # Convert to GeoDataFrame if needed (modifying in place)
+    # Convert roadway_net.nodes_df GeoDataFrame if needed (modifying in place)
     if not isinstance(roadway_net.nodes_df, gpd.GeoDataFrame):
         if "geometry" not in roadway_net.nodes_df.columns:
             node_geometry = [shapely.geometry.Point(x, y) for x, y in zip(roadway_net.nodes_df["X"], roadway_net.nodes_df["Y"])]
@@ -2097,6 +2251,46 @@ def create_feed_from_gtfs_model(
         if roadway_net.nodes_df.crs is None:
             roadway_net.nodes_df = roadway_net.nodes_df.set_crs(LAT_LON_CRS)
     
+
+    # Start with the tables from the GTFS model
+    feed_tables = {}
+
+    # Copy over standard tables that don't need modification
+    # GtfsModel guarantees routes and trips exist
+    feed_tables["routes"] = gtfs_model.routes
+    feed_tables["trips"] = gtfs_model.trips
+    feed_tables["agencies"] = gtfs_model.agency # feed calls this agencies
+    feed_tables["stops"] = gtfs_model.stops.copy() # create a copy of this which we'll manipulate
+    feed_tables["stop_times"] = gtfs_model.stop_times.copy() # create a copy of this which we'll manipulate
+
+    # create mapping from gtfs_model stop to RoadwayNetwork nodes
+    # GtfsModel guarantees stops exists
+    if not isinstance(feed_tables["stops"], gpd.GeoDataFrame):
+        stop_geometry = [
+            shapely.geometry.Point(lon, lat) for lon, lat in zip(gtfs_model.stops["stop_lon"], gtfs_model.stops["stop_lat"])
+        ]
+        feed_tables["stops"] = gpd.GeoDataFrame(feed_tables["stops"], geometry=stop_geometry, crs=LAT_LON_CRS)
+
+    # Add helpful extra data to stops table
+    add_agency_route_direction_shape_data_to_stops(feed_tables)
+
+    # create frequencies table from GTFS stop_times (if no frequencies table is specified)
+    if hasattr(gtfs_model, "frequencies") and gtfs_model.frequencies is not None:
+        feed_tables["frequencies"] = gtfs_model.frequencies
+        # TODO: What if the frequencies are specified for the wrong time periods?
+    else:
+        # GtfsModel specifies every individual trip but Feed expects the trip to be
+        # representative with frequencies. This makes that conversion
+        create_feed_frequencies(
+            feed_tables, timeperiods, frequency_method, default_frequency_for_onetime_route
+        )
+
+    if not add_stations_and_links:
+        raise NotImplementedError("create_feed_from_gtfs_feed() doesn't implement add_stations_and_links==False.")
+    
+    raise
+    add_stations_and_links_to_roadway_network(feed_tables, roadway_net)
+
     # Add transit accessibility attributes to nodes based on connected links
     # Initialize columns if they don't exist
     if "rail_only" not in roadway_net.nodes_df.columns:
@@ -2113,11 +2307,11 @@ def create_feed_from_gtfs_model(
         roadway_net.nodes_df["ferry_only"] = False
     else:
         roadway_net.nodes_df["ferry_only"] = roadway_net.nodes_df["ferry_only"].astype(bool)
+    
     if "drive_access" not in roadway_net.nodes_df.columns:
         roadway_net.nodes_df["drive_access"] = False
     else:
         roadway_net.nodes_df["drive_access"] = roadway_net.nodes_df["drive_access"].astype(bool)
-    WranglerLogger.debug(f"{roadway_net.nodes_df['drive_access'].dtype=}")
 
     # Get nodes connected by each type of link
     rail_only_links = roadway_net.links_df[roadway_net.links_df["rail_only"] == True]
@@ -2168,77 +2362,6 @@ def create_feed_from_gtfs_model(
         f"out of {len(roadway_net.nodes_df):,} total"
     )
 
-    # create mapping from gtfs_model stop to RoadwayNetwork nodes
-    # GtfsModel guarantees stops exists
-    if not isinstance(feed_tables["stops"], gpd.GeoDataFrame):
-        stop_geometry = [
-            shapely.geometry.Point(lon, lat) for lon, lat in zip(gtfs_model.stops["stop_lon"], gtfs_model.stops["stop_lat"])
-        ]
-        feed_tables["stops"] = gpd.GeoDataFrame(gtfs_model.stops, geometry=stop_geometry, crs=LAT_LON_CRS)
-
-    # Determine which stops are used by street-level transit vs other route types
-    # Need to join stops -> stop_times -> trips -> routes to get route types
-    WranglerLogger.info("Determining route types that serve each stop")
-
-    # Join stop_times with trips and routes
-    stop_trips = pd.merge(
-        gtfs_model.stop_times[["stop_id", "trip_id"]].drop_duplicates(),
-        gtfs_model.trips[["trip_id", "direction_id", "route_id"]],
-        on="trip_id",
-        how="left",
-    )
-    WranglerLogger.debug(f"After joining stop_times with trips: {len(stop_trips):,} records")
-
-    # Create stop to route, agency mapping with direction information
-    stop_agencies = pd.merge(
-        stop_trips, 
-        gtfs_model.routes[["route_id", "agency_id", "route_short_name", "route_type"]], 
-        on="route_id", 
-        how="left"
-    )[["stop_id", "agency_id", "route_id", "direction_id", "route_short_name","route_type"]].drop_duplicates()
-    
-    # pick up agency information; agency is a required table for gtfs_model
-    stop_agencies = pd.merge(
-        stop_agencies,
-        gtfs_model.agency[["agency_id", "agency_name"]],
-        on="agency_id",
-        how="left"
-    )
-    WranglerLogger.debug(f"stop_agencies.head():\n{stop_agencies.head()}")
-    
-    # Group by stop to get all agencies and routes serving each stop
-    # Now including route_dir_ids as list of (route_id, direction_id) tuples
-    stop_agency_info = stop_agencies.groupby("stop_id").agg({
-        "agency_id": lambda x: list(x.dropna().unique()),
-        "agency_name": lambda x: list(x.dropna().unique()) if x.notna().any() else [],
-        "route_id": lambda x: list(x.dropna().unique()),
-        "route_short_name": lambda x: list(x.dropna().unique()),
-        "route_type": lambda x: list(x.dropna().unique()),
-    }).reset_index()
-    
-    # Add route_dir_ids as list of unique (route_id, direction_id) tuples
-    route_dir_info = stop_agencies.groupby("stop_id").apply(
-        lambda x: list(x[["route_id", "direction_id"]].drop_duplicates().itertuples(index=False, name=None))
-    ).reset_index()
-    route_dir_info.columns = ["stop_id", "route_dir_ids"]
-    
-    # Merge route_dir_ids with other stop info
-    stop_agency_info = pd.merge(stop_agency_info, route_dir_info, on="stop_id", how="left")
-    
-    stop_agency_info.columns = ["stop_id", "agency_ids", "agency_names", "route_ids", "route_names", "route_types", "route_dir_ids"]
-    stop_agency_info["stop_in_mixed_traffic"] = stop_agency_info["route_types"].apply(
-        lambda x: any(rt in MIXED_TRAFFIC_ONLY_ROUTE_TYPES for rt in x) if x else False
-    )  # A stop is in mixed traffic if it serves MIXED_TRAFFIC_ONLY_ROUTE_TYPES
-
-    # columns: stop_id (str), agency_ids (list of str), agency_names (list of str), 
-    #   route_ids (list of str), route_names (list of str), route_types (list of int), 
-    #   route_dir_ids (list of tuples (route_id, direction_id)), stop_in_mixed_traffic (bool)
-    WranglerLogger.debug(f"stop_agency_info.head():\n{stop_agency_info.head()}")
-
-    # Merge this information back to stops
-    feed_tables["stops"] = pd.merge(
-        feed_tables["stops"], stop_agency_info, on="stop_id", how="left"
-    )
     WranglerLogger.debug(f"MIXED_TRAFFIC_ONLY_ROUTE_TYPES={MIXED_TRAFFIC_ONLY_ROUTE_TYPES}")
     WranglerLogger.debug(f"MIXED_TRAFFIC_AND_STATION_ROUTE_TYPES={MIXED_TRAFFIC_AND_STATION_ROUTE_TYPES}")
 
@@ -2257,40 +2380,6 @@ def create_feed_from_gtfs_model(
     mask = feed_tables["stops"]["serves_mixed_and_station_types"]
     feed_tables["stops"].loc[mask, "stop_in_mixed_traffic"] = ~feed_tables["stops"].loc[mask, "name_includes_station"]
     
-    # Handle parent stations that may not be included in trips
-    # For these, set child_stop_in_mixed_traffic if any of the child stops has stop_in_mixed_traffic == True
-    if "parent_station" in feed_tables["stops"].columns:
-        # Create a subset of child stops with their parent_station and stop_in_mixed_traffic status
-        child_stops = feed_tables["stops"][feed_tables["stops"]["parent_station"].notna() & (feed_tables["stops"]["parent_station"] != "")][
-            ["parent_station", "stop_in_mixed_traffic"]
-        ]
-        
-        if len(child_stops) > 0:
-            # Group by parent_station and check if any child is in mixed traffic
-            parent_mixed_traffic = child_stops.groupby("parent_station")["stop_in_mixed_traffic"].any().reset_index()
-            parent_mixed_traffic.columns = ["stop_id", "child_stop_in_mixed_traffic"]
-            parent_mixed_traffic["is_parent"] = True
-            WranglerLogger.debug(f"parent_mixed_traffic:\n{parent_mixed_traffic}")
-            
-            # Merge back to the main dataframe
-            feed_tables["stops"] = feed_tables["stops"].merge(
-                parent_mixed_traffic,
-                on="stop_id",
-                how="left"
-            )
-            
-            # Fill NaN values with False (stops that are not parent stations)
-            feed_tables["stops"]["is_parent"].fillna(value=False, inplace=True)
-            feed_tables["stops"]["child_stop_in_mixed_traffic"].fillna(value=False, inplace=True)
-            
-            # Log parent stations with child stops in mixed traffic
-            WranglerLogger.debug(
-                f"Parent stations with mixed traffic children:\n" + \
-                f"{feed_tables['stops'].loc[feed_tables['stops']['child_stop_in_mixed_traffic'] == True, ['stop_id', 'stop_name', 'child_stop_in_mixed_traffic']]}"
-            )
-    else:
-        feed_tables["stops"]["is_parent"] = False
-        feed_tables["stops"]["child_stop_in_mixed_traffic"] = False
 
     # for stops with stop_in_mixed_traffic.isna() that are parents, inherit child's state
     feed_tables["stops"].loc[ 
@@ -2504,25 +2593,6 @@ def create_feed_from_gtfs_model(
     )
     WranglerLogger.debug(f"feed_tables['stop_times'].dtypes:\n{feed_tables['stop_times'].dtypes}")
 
-    # create frequencies table from GTFS stop_times (if no frequencies table is specified)
-    if hasattr(gtfs_model, "frequencies") and gtfs_model.frequencies is not None:
-        feed_tables["frequencies"] = gtfs_model.frequencies
-    elif (
-        time_periods is not None
-        and hasattr(gtfs_model, "stop_times")
-        and gtfs_model.stop_times is not None
-    ):
-        # Create frequencies table from actual stop_times data
-        frequencies_df = create_frequencies_from_stop_times(
-            feed_tables, time_periods, default_frequency_for_onetime_route
-        )
-        if not frequencies_df.empty:
-            feed_tables["frequencies"] = frequencies_df
-
-            # Analyze pattern coverage
-            WranglerLogger.info("Analyzing trip coverage by stop patterns...")
-            coverage_df = analyze_frequency_coverage(gtfs_model, frequencies_df)
-
     # route gtfs street-level transit (buses, cable cars, and light rail) along roadway network
     # Create feed shapes by mapping shape points to roadway nodes
     if hasattr(gtfs_model, "shapes") and gtfs_model.shapes is not None:
@@ -2582,8 +2652,8 @@ def create_feed_from_gtfs_model(
 
 def filter_transit_by_boundary(
     transit_data: Union[GtfsModel, Feed],
-    boundary_file: Union[str, Path, gpd.GeoDataFrame],
-    partially_include_route_type_action: Optional[Dict[int, str]] = None,
+    boundary: Union[str, Path, gpd.GeoDataFrame],
+    partially_include_route_type_action: Optional[Dict[RouteType, str]] = None,
 ) -> None:
     """Filter transit routes based on whether they have stops within a boundary.
     
@@ -2593,25 +2663,26 @@ def filter_transit_by_boundary(
     
     Args:
         transit_data: Either a GtfsModel or Feed object to filter. Modified in place.
-        boundary_file: Path to boundary shapefile or a GeoDataFrame with boundary polygon(s)
-        partially_include_route_type_action: Optional dictionary mapping route_type to 
+        boundary: Path to boundary shapefile or a GeoDataFrame with boundary polygon(s)
+        partially_include_route_type_action: Optional dictionary mapping RouteType enum to 
             action for routes partially within boundary:
             - "truncate": Truncate route to only include stops within boundary
             Route types not specified in this dictionary will be kept entirely (default).
     
     Example:
+        >>> from network_wrangler.models.gtfs.types import RouteType
         >>> # Remove routes entirely outside the Bay Area
         >>> filtered_gtfs = filter_transit_by_boundary(
         ...     gtfs_model,
         ...     "bay_area_boundary.shp"
         ... )
         >>> 
-        >>> # Truncate bus routes at boundary, keep other route types unchanged
+        >>> # Truncate rail routes at boundary, keep other route types unchanged
         >>> filtered_gtfs = filter_transit_by_boundary(
         ...     gtfs_model,
         ...     "bay_area_boundary.shp",
         ...     partially_include_route_type_action={
-        ...         2: "truncate",  # Rail - will be truncated at boundary
+        ...         RouteType.RAIL: "truncate",  # Rail - will be truncated at boundary
         ...         # Other route types not listed will be kept entirely
         ...     }
         ... )
@@ -2622,12 +2693,12 @@ def filter_transit_by_boundary(
     WranglerLogger.debug(f"partially_include_route_type_action: {partially_include_route_type_action}")
     
     # Load boundary if it's a file path
-    if isinstance(boundary_file, (str, Path)):
-        WranglerLogger.debug(f"Loading boundary from file: {boundary_file}")
-        boundary_gdf = gpd.read_file(boundary_file)
+    if isinstance(boundary, (str, Path)):
+        WranglerLogger.debug(f"Loading boundary from file: {boundary}")
+        boundary_gdf = gpd.read_file(boundary)
     else:
         WranglerLogger.debug("Using provided boundary GeoDataFrame")
-        boundary_gdf = boundary_file
+        boundary_gdf = boundary
     
     WranglerLogger.debug(f"Boundary has {len(boundary_gdf)} polygon(s)")
     
@@ -2703,6 +2774,14 @@ def filter_transit_by_boundary(
     # Initialize with default filters
     if partially_include_route_type_action is None:
         partially_include_route_type_action = {}
+    
+    # Convert RouteType enum keys to int values for comparison with dataframe
+    normalized_route_type_action = {}
+    for key, value in partially_include_route_type_action.items():
+        if not isinstance(key, RouteType):
+            raise TypeError(f"Keys in partially_include_route_type_action must be RouteType enum, got {type(key)}")
+        normalized_route_type_action[key.value] = value
+    partially_include_route_type_action = normalized_route_type_action
     
     # Track routes to truncate
     routes_to_truncate = {}
