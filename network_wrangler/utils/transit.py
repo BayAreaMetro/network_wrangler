@@ -253,7 +253,7 @@ def create_feed_frequencies(
 
     # Use shape_per_route_dir_df to create a mapping from the new trip_id (shape_id + '_trip') and 
     # the representative (first) orig_trip_id
-    new_old_trip_id_df = shape_per_route_dir_df[['shape_id','first_trip_id']]
+    new_old_trip_id_df = shape_per_route_dir_df[['shape_id','first_trip_id']].copy()
     new_old_trip_id_df['trip_id'] = new_old_trip_id_df['shape_id'] + '_trip'
     new_old_trip_id_df.rename(columns={'first_trip_id':'orig_trip_id'}, inplace=True)
     new_old_trip_id_df.drop(columns=['shape_id'], inplace=True)
@@ -2048,12 +2048,10 @@ def add_additional_data_to_shapes(
     feed_tables['stops'].to_crs(local_crs, inplace=True)
     
     # Initialize shape columns for stop information
-    feed_tables['shapes']['shape_model_node_id'] = None
     feed_tables['shapes'][f'match_distance_{crs_units}'] = np.inf
     feed_tables['shapes']['stop_id'] = None
     feed_tables['shapes']['stop_name'] = ''
     feed_tables['shapes']['stop_sequence'] = None
-    feed_tables['shapes']['station_sequence'] = False # bool
     
     # Add stop geometry to stop_times and convert it a GeoDataFrame
     WranglerLogger.debug(f"Before merge, {len(feed_tables['stop_times'])=:,}")
@@ -2084,7 +2082,8 @@ def add_additional_data_to_shapes(
     pd_min_rows = pd.options.display.min_rows
     pd.options.display.min_rows = 600 
     import random
-    random_shape_ids = random.sample(unique_shape_ids, 20)
+    # random_shape_ids = random.sample(unique_shape_ids, 20)
+    random_shape_ids = ['SF:9717:20230930']
 
     WranglerLogger.debug(f"Logging details for random_shape_ids={random_shape_ids}")
 
@@ -2145,7 +2144,7 @@ def add_additional_data_to_shapes(
         # Log the result so far -- just the stop shapes
         if True and (shape_id in random_shape_ids):
             # refresh
-            shape_df = feed_tables['shapes'][feed_tables['shapes']['shape_id'] == shape_id].sort_values(by='shape_pt_sequence')
+            shape_df = feed_tables['shapes'].loc[feed_tables['shapes']['shape_id'] == shape_id].sort_values(by='shape_pt_sequence')
             # Get route and direction info from the first row
             first_row = shape_df.iloc[0]
             
@@ -2157,12 +2156,12 @@ def add_additional_data_to_shapes(
 
             debug_cols = ['shape_pt_sequence','shape_dist_traveled','stop_sequence','stop_id','stop_name',
                           f'match_distance_{crs_units}', 'shape_pt_lon', 'shape_pt_lat']
-            WranglerLogger.debug(f"\n{shape_df.loc[pd.notna(shape_df['stop_id']), debug_cols]}")
+            WranglerLogger.debug(f"\n{shape_df[debug_cols]}")
     
     
     WranglerLogger.info("Finished adding stop information to shapes")
     # revert to previous pd_min_rows
-    pd.options.display.min_rows = pd_min_rows 
+    # pd.options.display.min_rows = pd_min_rows 
 
 def add_stations_and_links_to_roadway_network(
     feed_tables: Dict[str, pd.DataFrame],
@@ -2178,8 +2177,90 @@ def add_stations_and_links_to_roadway_network(
     WranglerLogger.debug(f"feed_tables['stops'] type={type(feed_tables['stops'])}:\n{feed_tables['stops']}")
     WranglerLogger.debug(f"feed_tables['stop_times'] type={type(feed_tables['stop_times'])}:\n{feed_tables['stop_times']}")
 
-    # TODO: Prepare new link list first
-    # For all consecutive stop_ids in feed_table['stop_times']
+    # Add route_type to stop_times
+    if 'route_type' not in feed_tables['stop_times'].columns:
+        feed_tables['stop_times'] = pd.merge(
+            feed_tables['stop_times'],
+            feed_tables['routes'][['route_id','route_type']],
+            how='left',
+            on='route_id',
+            validate='many_to_one'
+        )
+
+    # Prepare new link list first
+    # For all consecutive stop_ids in feed_table['stop_times'], create consecutive node pairs for each shape
+    stop_links_df = feed_tables['stop_times'][['route_type','route_id','direction_id','shape_id','trip_id','stop_sequence','stop_id','stop_name','geometry']].copy()
+    stop_links_df.rename(columns={'geometry':'stop_geometry'}, inplace=True)
+    stop_links_df.sort_values(by=['trip_id','stop_sequence'], inplace=True)
+
+    stop_links_df['next_stop_id']       = stop_links_df.groupby('trip_id')['stop_id'].shift(-1)
+    stop_links_df['next_stop_name']     = stop_links_df.groupby('trip_id')['stop_name'].shift(-1)
+    stop_links_df['next_stop_geometry'] = stop_links_df.groupby('trip_id')['stop_geometry'].shift(-1)
+    
+    # Filter to only rows that have a next node (excludes last point of each shape)
+    # and filter out self-loops where the stop occurs twice in a row
+    has_next = stop_links_df['next_stop_id'].notna()
+    is_self_loop = stop_links_df['next_stop_id'] == stop_links_df['stop_id']
+    
+    num_self_loops = (has_next & is_self_loop).sum()
+    if num_self_loops > 0:
+        WranglerLogger.debug(f"Filtering out {num_self_loops:,} self-loop segments where stop_id == next_stop_id")
+    
+    stop_links_df = stop_links_df[has_next & ~is_self_loop]
+    WranglerLogger.debug(
+        f"stop_links_df.loc[stop_links_df.shape_id=='SF:9717:20230930']:\n"
+        f"{stop_links_df.loc[stop_links_df.shape_id=='SF:9717:20230930']}")
+    WranglerLogger.debug(f"stop_links_df.dtypes:\n{stop_links_df.dtypes}")
+
+    # TODO: feed_tables['shapes'] is a GeoDataFrame of points, 3 the columns 'shape_id', 'stop_id' and 'stop_sequence'
+    # Match these sequences with the stop_id/next_stop_id in stop_links_gdf based on shape_id and add intermediate points to the shape
+    shape_links_df = feed_tables['shapes'][['shape_id','geometry','stop_sequence','stop_id']].copy()
+    # set the stop_sequence to 1 for the first row of each shape_id
+    shape_links_df.loc[~shape_links_df['shape_id'].duplicated(), 'stop_sequence'] = -1
+    shape_links_df.loc[~shape_links_df['shape_id'].duplicated(), 'stop_id'      ] = -1
+    # fill forward
+    shape_links_df['shape_stop_sequence'] = shape_links_df['stop_sequence'].ffill()
+    shape_links_df['shape_stop_id']       = shape_links_df['stop_id'].ffill()
+    # drop the first one - that's already covered by the stop point
+    shape_links_df.loc[ shape_links_df['stop_id'].notna(), 'shape_stop_sequence'] = np.nan
+    shape_links_df.loc[ shape_links_df['stop_id'].notna(), 'shape_stop_id'] = np.nan
+    WranglerLogger.debug(
+        f"shape_links_df.loc[shape_links_df.shape_id=='SF:9717:20230930']:\n"
+        f"{shape_links_df.loc[shape_links_df.shape_id=='SF:9717:20230930']}"
+    )
+
+    # aggregate and convert to list
+    shape_links_agg_df = shape_links_df.groupby(by=['shape_id','shape_stop_sequence']).aggregate(
+        point_list = pd.NamedAgg(column='geometry', aggfunc=list),
+        num_points = pd.NamedAgg(column='geometry', aggfunc='nunique')
+    ).reset_index(drop=False)
+    WranglerLogger.debug(
+        f"shape_links_agg_df.loc[shape_links_agg_df.shape_id=='SF:9717:20230930']:\n"
+        f"{shape_links_agg_df.loc[shape_links_agg_df.shape_id=='SF:9717:20230930']}"
+    )
+
+    # columns are shape_id, stop_sequence, point_list
+    stop_links_df = pd.merge(
+        left=stop_links_df,
+        right=shape_links_agg_df.rename(columns={'shape_stop_sequence':'stop_sequence'}),
+        on=['shape_id','stop_sequence'],
+        indicator=True
+    )
+    WranglerLogger.debug(f"stop_links_df._merge.value_counts():\n{stop_links_df._merge.value_counts()}")
+    WranglerLogger.debug(f"stop_links_df:\n{stop_links_df}")
+
+    # turn them into multi-point lines
+    stop_links_df['geometry'] = stop_links_df.apply(
+        lambda row: shapely.geometry.LineString(
+            [row['stop_geometry']] + row['point_list'] +  [row['next_stop_geometry']]), axis=1)
+    WranglerLogger.debug(f"stop_links_df:\n{stop_links_df}")
+
+    # create GeoDataFrame and write it
+    WranglerLogger.debug(f"{feed_tables['stops'].crs=}")
+    stop_links_df.drop(columns=['stop_geometry','next_stop_geometry','point_list','_merge'], inplace=True)
+    stop_links_gdf = gpd.GeoDataFrame(stop_links_df, geometry='geometry', crs=feed_tables['stops'].crs)
+    stop_links_gdf.to_file("stop_shapes.shp")
+    WranglerLogger.info("Wrote stop_shapes.shp")
 
 def create_feed_from_gtfs_model(
     gtfs_model: GtfsModel,
