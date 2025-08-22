@@ -84,12 +84,7 @@ def load_feed_from_path(
 
     if service_ids_filter is not None:
         WranglerLogger.info(f"Filtering trips to {len(service_ids_filter)} service_ids")
-        WranglerLogger.debug(
-            f"service_ids_filter type: {type(service_ids_filter)}, columns: {service_ids_filter.columns.tolist() if hasattr(service_ids_filter, 'columns') else 'N/A'}"
-        )
-        WranglerLogger.debug(
-            f"First few service_ids to filter: {service_ids_filter.head() if hasattr(service_ids_filter, 'head') else service_ids_filter[:5]}"
-        )
+        WranglerLogger.debug(f"Filtering service_ids: {service_ids_filter}")
 
         # filter to trips for these service_ids
         original_trip_count = len(feed_dfs["trips"])
