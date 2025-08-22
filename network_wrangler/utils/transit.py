@@ -2182,8 +2182,7 @@ def add_additional_data_to_shapes(
     
     WranglerLogger.info("Finished adding stop information to shapes")
     # revert to previous pd_max_rows
-    # TEMP - don't commit
-    # pd.options.display.max_rows = pd_max_rows 
+    pd.options.display.max_rows = pd_max_rows 
 
 def add_stations_and_links_to_roadway_network(
     feed_tables: Dict[str, pd.DataFrame],
