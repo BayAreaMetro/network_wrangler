@@ -267,7 +267,7 @@ def _read_table_from_file(table: str, file: Path) -> pd.DataFrame:
     WranglerLogger.debug(f"...reading {file}.")
     try:
         if file.suffix in [".csv", ".txt"]:
-            return pd.read_csv(file)
+            return pd.read_csv(file, low_memory=False)
         if file.suffix == ".parquet":
             return pd.read_parquet(file)
     except Exception as e:

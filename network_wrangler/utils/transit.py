@@ -251,7 +251,7 @@ def create_feed_frequencies(
     # 4        3D:1094:20230930            542.00  [817754, 813644, 811043, 819910, 810948, 81093...  3D:300X            0     3D:36:20230930         AM
 
     # First, group without timeperiods to make sure there is one shape_id per route_id and direction_id
-    shape_per_route_dir_df = stop_patterns_df.groupby(by=['route_id','direction_id','shape_id']).aggregate(
+    shape_per_route_dir_df = stop_patterns_df.groupby(by=['route_id','direction_id','shape_id'], observed=False).aggregate(
         num_trip_ids      = pd.NamedAgg(column='trip_id',          aggfunc='nunique'),
         trip_ids          = pd.NamedAgg(column='trip_id',          aggfunc=list),
         first_trip_id     = pd.NamedAgg(column='trip_id',          aggfunc='first'),
@@ -279,7 +279,7 @@ def create_feed_frequencies(
     WranglerLogger.debug(f"new_old_trip_id_df:\n{new_old_trip_id_df}")
 
     # Now, groupby route_id, direction_id, shape_id, timeperiod and count unique trip_ids, stop_patterns
-    shape_patterns_df = stop_patterns_df.groupby(by=['route_id','direction_id','shape_id','timeperiod']).aggregate(
+    shape_patterns_df = stop_patterns_df.groupby(by=['route_id','direction_id','shape_id','timeperiod'], observed=False).aggregate(
         num_trip_ids      = pd.NamedAgg(column='trip_id',          aggfunc='nunique'),
         trip_ids          = pd.NamedAgg(column='trip_id',          aggfunc=list),
         trip_depart_time  = pd.NamedAgg(column='trip_depart_time', aggfunc=lambda x: sorted(list(x))),
@@ -1915,7 +1915,8 @@ def add_additional_data_to_stops(
     
     # Add route_dir_shape_ids as list of unique (route_id, direction_id) tuples
     route_dir_shape_info = stop_agencies.groupby("stop_id").apply(
-        lambda x: list(x[["route_id", "direction_id", "shape_id"]].drop_duplicates().itertuples(index=False, name=None))
+        lambda x: list(x[["route_id", "direction_id", "shape_id"]].drop_duplicates().itertuples(index=False, name=None)),
+        include_groups=False
     ).reset_index()
     route_dir_shape_info.columns = ["stop_id", "route_dir_shape_ids"]
     WranglerLogger.debug(f"route_dir_shape_info:\n{route_dir_shape_info}")
@@ -1961,8 +1962,10 @@ def add_additional_data_to_stops(
             )
             
             # Fill NaN values with False (stops that are not parent stations)
-            feed_tables["stops"]["is_parent"].fillna(value=False, inplace=True)
-            feed_tables["stops"]["child_stop_in_mixed_traffic"].fillna(value=False, inplace=True)
+            # Suppress downcasting warning for fillna
+            with pd.option_context('future.no_silent_downcasting', True):
+                feed_tables["stops"]["is_parent"] = feed_tables["stops"]["is_parent"].fillna(value=False).astype(bool)
+                feed_tables["stops"]["child_stop_in_mixed_traffic"] = feed_tables["stops"]["child_stop_in_mixed_traffic"].fillna(value=False).astype(bool)
             
             # Log parent stations with child stops in mixed traffic
             WranglerLogger.debug(
@@ -2186,7 +2189,7 @@ def add_stations_and_links_to_roadway_network(
     local_crs: str,
     crs_units: str,
     trace_shape_ids: Optional[List[str]] = None
-) -> Dict[str,int]:
+) -> Tuple[Dict[str,int], pd.DataFrame]:
     """Add nodes and links for transit stations and links to the given RoadwayNetwork.
 
     For routes that are STATION_ROUTE_TYPES, this function modifies the roadway_net in place.
@@ -2202,8 +2205,11 @@ def add_stations_and_links_to_roadway_network(
         trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
 
     Returns:
-        stop_id_to_model_node_id_dict (Dict[str,int]) mapping stop_id to model_node_ids for new
-            roadway nodes created from stations.
+        Tuple containing:
+            - stop_id_to_model_node_id_dict (Dict[str,int]): mapping stop_id to model_node_ids for new
+                roadway nodes created from stations.
+            - non_station_stop_links_df (pd.DataFrame): DataFrame containing stop links for non-station
+                route types (e.g., buses) that were not added to the roadway network.
     """
     WranglerLogger.info(f"Adding transit stations and station-based links to the roadway network")
     WranglerLogger.debug(f"feed_tables['shapes'] type={type(feed_tables['shapes'])}:\n{feed_tables['shapes']}")
@@ -2265,8 +2271,10 @@ def add_stations_and_links_to_roadway_network(
     shape_links_df.loc[~shape_links_df['shape_id'].duplicated(), 'stop_sequence'] = -1
     shape_links_df.loc[~shape_links_df['shape_id'].duplicated(), 'stop_id'      ] = -1
     # fill forward
-    shape_links_df['shape_stop_sequence'] = shape_links_df['stop_sequence'].ffill()
-    shape_links_df['shape_stop_id']       = shape_links_df['stop_id'].ffill()
+    # Suppress downcasting warning for ffill
+    with pd.option_context('future.no_silent_downcasting', True):
+        shape_links_df['shape_stop_sequence'] = shape_links_df['stop_sequence'].ffill()
+        shape_links_df['shape_stop_id']       = shape_links_df['stop_id'].ffill()
     # drop the first one - that's already covered by the stop point
     shape_links_df.loc[ shape_links_df['stop_id'].notna(), 'shape_stop_sequence'] = np.nan
     shape_links_df.loc[ shape_links_df['stop_id'].notna(), 'shape_stop_id'] = np.nan
@@ -2351,7 +2359,7 @@ def add_stations_and_links_to_roadway_network(
     # dtype: object
     
     # Filter to STATION_ROUTE_TYPES for adding to the roadway network
-    station_stop_links_gdf = stop_links_df.loc[ stop_links_df.route_type.isin(STATION_ROUTE_TYPES) ]
+    station_stop_links_gdf = stop_links_df.loc[ stop_links_df.route_type.isin(STATION_ROUTE_TYPES) ].copy()
     station_stop_links_gdf.set_crs(stop_links_gdf.crs, inplace=True)
     station_stop_id_set = set(stop_links_df['stop_id']) | set(stop_links_df['next_stop_id'])
 
@@ -2401,6 +2409,7 @@ def add_stations_and_links_to_roadway_network(
     max_model_link_id = roadway_net.links_df.model_link_id.max()
     station_road_links_gdf['model_link_id'] = station_road_links_gdf.index + max_model_link_id + 1
     station_road_links_gdf['name'] = station_road_links_gdf['stop_name'] + " to " + station_road_links_gdf['next_stop_name']
+    station_road_links_gdf['shape_id'] = station_road_links_gdf['stop_id'] + " to " + station_road_links_gdf['next_stop_id']
     station_road_links_gdf['drive_access'] = False
     station_road_links_gdf['bike_access'] = False
     station_road_links_gdf['walk_access'] = False
@@ -2425,8 +2434,11 @@ def add_stations_and_links_to_roadway_network(
 
     WranglerLogger.info(f"Adding {len(station_road_links_gdf):,} shapes to roadway network")
     roadway_net.add_shapes(station_road_links_gdf)
-    #TODO also return stop_links_df.loc[ not stop_links_df.route_type.isin(STATION_ROUTE_TYPES) ]
-    return stop_id_to_model_node_id_dict
+    
+    # Filter non-station stop links to return
+    non_station_stop_links_df = stop_links_df.loc[~stop_links_df.route_type.isin(STATION_ROUTE_TYPES)]
+    
+    return stop_id_to_model_node_id_dict, non_station_stop_links_df
 
 def create_feed_from_gtfs_model(
     gtfs_model: GtfsModel,
@@ -2535,9 +2547,11 @@ def create_feed_from_gtfs_model(
     # Add helpful extra data to shapes table
     add_additional_data_to_shapes(feed_tables, local_crs, crs_units)
 
-    station_id_to_model_node_id_dict = add_stations_and_links_to_roadway_network(
+    station_id_to_model_node_id_dict, non_station_stop_links_df = add_stations_and_links_to_roadway_network(
         feed_tables, roadway_net, local_crs, crs_units, trace_shape_ids)
-    raise
+    
+    WranglerLogger.debug(f"non_station_stop_links_df:\n{non_station_stop_links_df}")
+    raise Exception("This is not a real exception but just for testing")
 
     # Add transit accessibility attributes to nodes based on connected links
     # Initialize columns if they don't exist
