@@ -260,7 +260,7 @@ class DBModelMixin:
             if _missing:
                 WranglerLogger.error(
                     f"Following values missing from {pk_table_name}.{pk_field} that " + \
-                    f"are referenced by {ref_table}: \n{_missing}"
+                    f"are referenced by {_missing}:\n{ref_table}"
                 )
         return all_valid
 
