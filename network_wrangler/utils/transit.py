@@ -50,6 +50,23 @@ STATION_ROUTE_TYPES = [
 """GTFS route types that operate at stations.
 """
 
+RAIL_ROUTE_TYPES = [
+    RouteType.TRAM,
+    RouteType.SUBWAY,
+    RouteType.RAIL, 
+    RouteType.AERIAL_LIFT,
+    RouteType.FUNICULAR,
+    RouteType.MONORAIL
+]
+"""GTFS route types which trigger 'rail_only' link creation in add_stations_and_links_to_roadway_network()
+"""
+
+FERRY_ROUTE_TYPES = [
+    RouteType.FERRY
+]
+"""GTFS route types which trigger 'ferry_only' link creation in add_stations_and_links_to_roadway_network()
+"""
+
 CONNECTIVITY_MATCH_ROUTE_TYPES = [
     RouteType.SUBWAY, 
     RouteType.RAIL, 
@@ -90,6 +107,7 @@ def create_feed_frequencies(
     timeperiods: Dict[str, Tuple[str, str]],
     frequency_method: str,
     default_frequency_for_onetime_route: int = 10800,
+    trace_shape_ids: Optional[List[str]] = None
 ):
     """Create a frequencies and convert GTFS-style tables to Wrangler-style Feed tables.
 
@@ -118,6 +136,7 @@ def create_feed_frequencies(
             The other two look at the time between trips during the timeperiod.
         default_frequency_for_onetime_route (int, optional): Default headway in seconds
             for routes with only one trip in a period. Defaults to 10800 (3 hours).
+        trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
 
     Returns:
         None
@@ -304,13 +323,14 @@ def create_feed_frequencies(
     # Make it default_frequency_for_onetime_route if needed
     shape_patterns_df.loc[ shape_patterns_df["num_trip_ids"] <= 1, 'headway_mins'] = default_frequency_for_onetime_route
     WranglerLogger.debug(f"After calculating different versions of headways, shape_patterns_df:\n{shape_patterns_df}")
-
     #      route_id direction_id           shape_id timeperiod  num_trip_ids                                           trip_ids         trip_depart_time                                       stop_pattern  timeperiod_duration_minutes  uniform_headway  mean_headway  median_headway  headway_mins
     # 0     3D:200X            0     3D:83:20230930         AM             3  [3D:1118:20230930, 3D:1130:20230930, 3D:1166:2...    [445.0, 505.0, 588.0]  [819191, 818955, 819209, 813979, 814568, 81399...                       240.00            80.00         71.00           71.00         71.00
     # 1     3D:200X            0     3D:83:20230930         PM             3  [3D:1100:20230930, 3D:1354:20230930, 3D:1430:2...   [912.0, 972.0, 1032.0]  [819191, 818955, 819209, 813979, 814568, 81399...                       240.00            80.00         60.00           60.00         60.00
     # 2     3D:200X            1     3D:82:20230930         AM             3  [3D:1117:20230930, 3D:1129:20230930, 3D:1165:2...    [380.0, 440.0, 520.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       240.00            80.00         70.00           70.00         70.00
     # 3     3D:200X            1     3D:82:20230930         MD             1                                 [3D:1099:20230930]                  [856.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       300.00           300.00           NaN             NaN      10800.00
     # 4     3D:200X            1     3D:82:20230930         PM             2               [3D:1353:20230930, 3D:1429:20230930]           [916.0, 976.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       240.00           120.00         60.00           60.00         60.00
+    if trace_shape_ids:
+        WranglerLogger.debug(f"trace_shape_ids shape_patterns_df:\n{shape_patterns_df.loc[ shape_patterns_df.shape_id.isin(trace_shape_ids)]}")
 
     # trip_id is now the same as shape_id (but let's add suffix '_trip')
     # Create feed_tables['frequencies'] compatible with WranglerFrequenciesTable
@@ -329,6 +349,8 @@ def create_feed_frequencies(
     # 2     3D:200X            1     3D:82:20230930         AM             3  [3D:1117:20230930, 3D:1129:20230930, 3D:1165:2...     [380.0, 440.0, 520.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       240.00            80.00         70.00           70.00         70.00     3D:82:20230930_trip      06:00    10:00       4200.00
     # 3     3D:200X            1     3D:82:20230930         MD             1                                 [3D:1099:20230930]                   [856.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       300.00           300.00           NaN             NaN      10800.00     3D:82:20230930_trip      10:00    15:00     648000.00
     # 4     3D:200X            1     3D:82:20230930         PM             2               [3D:1353:20230930, 3D:1429:20230930]            [916.0, 976.0]  [818889, 816287, 816481, 819221, 819213, 81456...                       240.00           120.00         60.00           60.00         60.00     3D:82:20230930_trip      15:00    19:00       3600.00
+    if trace_shape_ids:
+        WranglerLogger.debug(f"trace_shape_ids shape_patterns_df:\n{shape_patterns_df.loc[ shape_patterns_df.shape_id.isin(trace_shape_ids)]}")
 
     feed_tables['frequencies'] = shape_patterns_df[['trip_id','start_time','end_time','headway_secs']]
     WranglerLogger.debug(f"feed_tables['frequencies']:\n{feed_tables['frequencies']}")
@@ -1595,8 +1617,8 @@ def create_feed_shapes(
         WranglerLogger.info(f"Removed {removed_count:,} duplicate consecutive shape points")
 
     # Debug log some of these
-    if True:
-        for shape_id in random_shape_ids:
+    if trace_shape_ids:
+        for shape_id in trace_shape_ids:
             # refresh
             shape_df = feed_tables['shapes'][feed_tables['shapes']['shape_id'] == shape_id].sort_values(by='shape_pt_sequence')
             # Get route and direction info from the first row
@@ -1687,8 +1709,6 @@ def create_feed_shapes(
                 # Add intermediate nodes to shapes (skip first and last as they already exist)
                 if path_length > 1:  # There are intermediate nodes
                     intermediate_nodes = list(path)[1:-1]  # Convert to list and get intermediate nodes
-
-                    # if shape_id in random_shape_ids:
                         
                     for i, intermediate_node in enumerate(intermediate_nodes, start=1):
                         if intermediate_node in node_coords:
@@ -1959,6 +1979,7 @@ def add_additional_data_to_shapes(
     feed_tables: Dict[str, pd.DataFrame],
     local_crs: str,
     crs_units: str,
+    trace_shape_ids: Optional[List[str]] = None
 ):
     """Updates feed_tables['shapes'] with additional metadata about those shapes.
 
@@ -1989,7 +2010,8 @@ def add_additional_data_to_shapes(
     Args:
         local_crs: Local coordinate reference system for projection
         crs_units: 'feet' or 'meters', corresonding to local_crs
-    
+        trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
+
     """
     # Step 1: Convert shapes to GeoDataFrame if needed and add geometry from lat/lon coordinates
     # Create GeoDataFrame from shape points if not already one
@@ -2078,14 +2100,9 @@ def add_additional_data_to_shapes(
 
     matched_count = 0
 
-    # Log shape information for some shape_ids for debugging
+    # Log shape information for trace_shape_ids for debugging
     pd_min_rows = pd.options.display.min_rows
     pd.options.display.min_rows = 600 
-    import random
-    # random_shape_ids = random.sample(unique_shape_ids, 20)
-    random_shape_ids = ['SF:9717:20230930']
-
-    WranglerLogger.debug(f"Logging details for random_shape_ids={random_shape_ids}")
 
     # Make sure this is sorted by trip and then stop sequence
     feed_tables['stop_times'].sort_values(by=['trip_id','stop_sequence'], inplace=True)
@@ -2142,7 +2159,7 @@ def add_additional_data_to_shapes(
                 matched_count += 1
 
         # Log the result so far -- just the stop shapes
-        if True and (shape_id in random_shape_ids):
+        if trace_shape_ids and (shape_id in trace_shape_ids):
             # refresh
             shape_df = feed_tables['shapes'].loc[feed_tables['shapes']['shape_id'] == shape_id].sort_values(by='shape_pt_sequence')
             # Get route and direction info from the first row
@@ -2161,16 +2178,32 @@ def add_additional_data_to_shapes(
     
     WranglerLogger.info("Finished adding stop information to shapes")
     # revert to previous pd_min_rows
-    # pd.options.display.min_rows = pd_min_rows 
+    pd.options.display.min_rows = pd_min_rows 
 
 def add_stations_and_links_to_roadway_network(
     feed_tables: Dict[str, pd.DataFrame],
-    roadway_net: RoadwayNetwork
-):
+    roadway_net: RoadwayNetwork,
+    local_crs: str,
+    crs_units: str,
+    trace_shape_ids: Optional[List[str]] = None
+) -> Dict[str,int]:
     """Add nodes and links for transit stations and links to the given RoadwayNetwork.
 
     For routes that are STATION_ROUTE_TYPES, this function modifies the roadway_net in place.
     Add nodes first, then links.
+
+    Args:
+        feed_tables (Dict[str, pd.DataFrame]): Dictionary of feed tables including
+            shapes, stops and stop_times
+        roadway_net (RoadwayNetwork): This object will be updated, with new nodes and
+            links added for the transit network.
+        local_crs: Coordinate reference system to use for projection, in feet. (e.g., "EPSG:2227")
+        crs_units: 'feet' or 'meters', corresonding to local_crs
+        trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
+
+    Returns:
+        stop_id_to_model_node_id_dict (Dict[str,int]) mapping stop_id to model_node_ids for new
+            roadway nodes created from stations.
     """
     WranglerLogger.info(f"Adding transit stations and station-based links to the roadway network")
     WranglerLogger.debug(f"feed_tables['shapes'] type={type(feed_tables['shapes'])}:\n{feed_tables['shapes']}")
@@ -2208,11 +2241,24 @@ def add_stations_and_links_to_roadway_network(
     
     stop_links_df = stop_links_df[has_next & ~is_self_loop]
     WranglerLogger.debug(
-        f"stop_links_df.loc[stop_links_df.shape_id=='SF:9717:20230930']:\n"
-        f"{stop_links_df.loc[stop_links_df.shape_id=='SF:9717:20230930']}")
+        f"trace stop_links_df:\n"
+        f"{stop_links_df.loc[stop_links_df.shape_id.isin(trace_shape_ids)]}")
     WranglerLogger.debug(f"stop_links_df.dtypes:\n{stop_links_df.dtypes}")
+    # route_type            category
+    # route_id                object
+    # direction_id          category
+    # shape_id                object
+    # trip_id                 object
+    # stop_sequence            int64
+    # stop_id                 object
+    # stop_name               object
+    # stop_geometry         geometry
+    # next_stop_id            object
+    # next_stop_name          object
+    # next_stop_geometry    geometry
+    # dtype: object
 
-    # TODO: feed_tables['shapes'] is a GeoDataFrame of points, 3 the columns 'shape_id', 'stop_id' and 'stop_sequence'
+    # feed_tables['shapes'] is a GeoDataFrame of points, 3 the columns 'shape_id', 'stop_id' and 'stop_sequence'
     # Match these sequences with the stop_id/next_stop_id in stop_links_gdf based on shape_id and add intermediate points to the shape
     shape_links_df = feed_tables['shapes'][['shape_id','geometry','stop_sequence','stop_id']].copy()
     # set the stop_sequence to 1 for the first row of each shape_id
@@ -2224,22 +2270,52 @@ def add_stations_and_links_to_roadway_network(
     # drop the first one - that's already covered by the stop point
     shape_links_df.loc[ shape_links_df['stop_id'].notna(), 'shape_stop_sequence'] = np.nan
     shape_links_df.loc[ shape_links_df['stop_id'].notna(), 'shape_stop_id'] = np.nan
-    WranglerLogger.debug(
-        f"shape_links_df.loc[shape_links_df.shape_id=='SF:9717:20230930']:\n"
-        f"{shape_links_df.loc[shape_links_df.shape_id=='SF:9717:20230930']}"
-    )
+    if trace_shape_ids:
+        WranglerLogger.debug(
+            f"trace shape_links_df:\n"
+            f"{shape_links_df.loc[shape_links_df.shape_id.isin(trace_shape_ids)]}"
+        )
+    # Example: this shape's first stop is stop_sequence=2, the shape points at the beginning are pre-trip points
+    #                 shape_id                         geometry stop_sequence stop_id  shape_stop_sequence shape_stop_id
+    # 909222  SF:9717:20230930  POINT (6013196.693 2109556.951)            -1      -1                  NaN           NaN
+    # 909223  SF:9717:20230930  POINT (6013227.638 2109614.595)          None    None                -1.00            -1
+    # 909224  SF:9717:20230930  POINT (6013265.791 2109685.568)          None    None                -1.00            -1
+    # 909225  SF:9717:20230930  POINT (6013316.874 2109752.637)          None    None                -1.00            -1
+    # 909226  SF:9717:20230930  POINT (6013604.053 2110029.431)          None    None                -1.00            -1
+    # 909227  SF:9717:20230930  POINT (6013637.289 2110057.529)          None    None                -1.00            -1
+    # 909228  SF:9717:20230930  POINT (6014283.122 2110658.483)             2   15240                  NaN           NaN
+    # 909229  SF:9717:20230930  POINT (6014293.455 2110683.403)          None    None                 2.00         15240
+    # 909230  SF:9717:20230930  POINT (6014940.906 2111322.944)          None    None                 2.00         15240
+    # 909231  SF:9717:20230930  POINT (6015538.148 2111853.892)             3   15237                  NaN           NaN
+    # 909232  SF:9717:20230930  POINT (6015603.806 2111941.794)          None    None                 3.00         15237
+    # 909233  SF:9717:20230930  POINT (6015814.592 2112130.926)          None    None                 3.00         15237
+    # 909234  SF:9717:20230930  POINT (6015897.484 2112242.153)          None    None                 3.00         15237
+    # 909235  SF:9717:20230930   POINT (6015932.62 2112307.364)          None    None                 3.00         15237
+    # 909236  SF:9717:20230930  POINT (6015955.806 2112367.716)          None    None                 3.00         15237
+    # 909237  SF:9717:20230930  POINT (6015971.693 2112438.778)          None    None                 3.00         15237
+    # 909238  SF:9717:20230930  POINT (6015985.888 2112526.263)          None    None                 3.00         15237
+    # 909239  SF:9717:20230930   POINT (6015989.04 2112639.464)          None    None                 3.00         15237
+    # 909240  SF:9717:20230930  POINT (6016045.522 2113160.945)          None    None                 3.00         15237
+    # 909241  SF:9717:20230930  POINT (6016108.599 2113665.541)             4   17145                  NaN           NaN
 
     # aggregate and convert to list
     shape_links_agg_df = shape_links_df.groupby(by=['shape_id','shape_stop_sequence']).aggregate(
         point_list = pd.NamedAgg(column='geometry', aggfunc=list),
         num_points = pd.NamedAgg(column='geometry', aggfunc='nunique')
     ).reset_index(drop=False)
-    WranglerLogger.debug(
-        f"shape_links_agg_df.loc[shape_links_agg_df.shape_id=='SF:9717:20230930']:\n"
-        f"{shape_links_agg_df.loc[shape_links_agg_df.shape_id=='SF:9717:20230930']}"
-    )
+    if trace_shape_ids:
+        WranglerLogger.debug(
+            f"trace shape_links_agg_df:\n"
+            f"{shape_links_agg_df.loc[shape_links_agg_df.shape_id.isin(trace_shape_ids)]}"
+        )
+    # columns are shape_id, stop_sequence, point_list, num_points
+    #                shape_id  shape_stop_sequence                                         point_list  num_points
+    # 36235  SF:9717:20230930                -1.00  [POINT (6013227.6381617775 2109614.5949144145)...           5
+    # 36236  SF:9717:20230930                 2.00  [POINT (6014293.454981883 2110683.4032201055),...           2
+    # 36237  SF:9717:20230930                 3.00  [POINT (6015603.805947471 2111941.793745517), ...           9
+    # 36238  SF:9717:20230930                 4.00  [POINT (6016092.661659231 2113720.8560314486),...          13
 
-    # columns are shape_id, stop_sequence, point_list
+    # add intermediate stops to stop_links
     stop_links_df = pd.merge(
         left=stop_links_df,
         right=shape_links_agg_df.rename(columns={'shape_stop_sequence':'stop_sequence'}),
@@ -2247,7 +2323,8 @@ def add_stations_and_links_to_roadway_network(
         indicator=True
     )
     WranglerLogger.debug(f"stop_links_df._merge.value_counts():\n{stop_links_df._merge.value_counts()}")
-    WranglerLogger.debug(f"stop_links_df:\n{stop_links_df}")
+    if trace_shape_ids:
+        WranglerLogger.debug(f"trace stop_links_df:\n{stop_links_df.loc[stop_links_df.shape_id.isin(trace_shape_ids)]}")
 
     # turn them into multi-point lines
     stop_links_df['geometry'] = stop_links_df.apply(
@@ -2255,12 +2332,101 @@ def add_stations_and_links_to_roadway_network(
             [row['stop_geometry']] + row['point_list'] +  [row['next_stop_geometry']]), axis=1)
     WranglerLogger.debug(f"stop_links_df:\n{stop_links_df}")
 
-    # create GeoDataFrame and write it
-    WranglerLogger.debug(f"{feed_tables['stops'].crs=}")
+    # create GeoDataFrame; this is in the local crs
     stop_links_df.drop(columns=['stop_geometry','next_stop_geometry','point_list','_merge'], inplace=True)
     stop_links_gdf = gpd.GeoDataFrame(stop_links_df, geometry='geometry', crs=feed_tables['stops'].crs)
-    stop_links_gdf.to_file("stop_shapes.shp")
-    WranglerLogger.info("Wrote stop_shapes.shp")
+    WranglerLogger.debug(f"stop_links_gdf.dtypes\n{stop_links_gdf.dtypes}")
+    # route_type        category
+    # route_id            object
+    # direction_id      category
+    # shape_id            object
+    # trip_id             object
+    # stop_sequence        int64
+    # stop_id             object
+    # stop_name           object
+    # next_stop_id        object
+    # next_stop_name      object
+    # num_points           int64
+    # geometry          geometry
+    # dtype: object
+    
+    # Filter to STATION_ROUTE_TYPES for adding to the roadway network
+    station_stop_links_gdf = stop_links_df.loc[ stop_links_df.route_type.isin(STATION_ROUTE_TYPES) ]
+    station_stop_links_gdf.set_crs(stop_links_gdf.crs, inplace=True)
+    station_stop_id_set = set(stop_links_df['stop_id']) | set(stop_links_df['next_stop_id'])
+
+    # Prepare nodes to add
+    station_stop_ids_gdf = feed_tables['stops'].loc[ 
+        feed_tables['stops']['stop_id'].isin(station_stop_id_set), 
+        ['stop_id','stop_name','stop_lat','stop_lon','geometry'] ].reset_index(drop=True).copy()
+    station_stop_ids_gdf.rename(columns={'stop_lon':'X', 'stop_lat':'Y'}, inplace=True)
+    station_stop_ids_gdf.to_crs(LAT_LON_CRS, inplace=True)
+    
+    # Assign model_node_id and add to roadway network
+    max_node_num = roadway_net.nodes_df.model_node_id.max()
+    station_stop_ids_gdf['model_node_id'] = station_stop_ids_gdf.index + max_node_num + 1
+    WranglerLogger.info(f"Adding {len(station_stop_ids_gdf):,} nodes to roadway network")
+    WranglerLogger.debug(f"station_stop_ids_gdf:\n{station_stop_ids_gdf}")
+    WranglerLogger.debug(f"Before adding nodes, {len(roadway_net.nodes_df)=:,}")
+    roadway_net.add_nodes(station_stop_ids_gdf)
+    WranglerLogger.debug(f"After adding nodes, {len(roadway_net.nodes_df)=:,}")
+
+    stop_id_to_model_node_id_dict = station_stop_ids_gdf[['stop_id','model_node_id']].set_index('stop_id').to_dict()['model_node_id']
+    WranglerLogger.debug(f"stop_id_to_model_node_id_dict:\n{stop_id_to_model_node_id_dict}")
+
+    # Prepare links to add
+    station_stop_links_gdf['A'] = station_stop_links_gdf['stop_id'].map(stop_id_to_model_node_id_dict)
+    station_stop_links_gdf['B'] = station_stop_links_gdf['next_stop_id'].map(stop_id_to_model_node_id_dict)
+    # Set rail/ferry only values
+    station_stop_links_gdf = station_stop_links_gdf[['route_type','A','stop_id','stop_name','B','next_stop_id','next_stop_name','geometry']]
+    station_stop_links_gdf['rail_only'] = False
+    station_stop_links_gdf.loc[ station_stop_links_gdf.route_type.isin(RAIL_ROUTE_TYPES), 'rail_only'] = True
+    station_stop_links_gdf['ferry_only'] = False
+    station_stop_links_gdf.loc[ station_stop_links_gdf.route_type.isin(FERRY_ROUTE_TYPES), 'ferry_only'] = True
+    # Aggregate by A,B, choosing first values, and convert back to GeoDataFrame
+    station_road_links_gdf = gpd.GeoDataFrame(
+        station_stop_links_gdf.groupby(by=['A','B']).aggregate(
+            stop_id        = pd.NamedAgg(column='stop_id', aggfunc='first'),
+            stop_name      = pd.NamedAgg(column='stop_name', aggfunc='first'),
+            next_stop_id   = pd.NamedAgg(column='next_stop_id', aggfunc='first'),
+            next_stop_name = pd.NamedAgg(column='next_stop_name', aggfunc='first'),
+            geometry       = pd.NamedAgg(column='geometry', aggfunc='first'),
+            rail_only      = pd.NamedAgg(column='rail_only', aggfunc=any),
+            ferry_only     = pd.NamedAgg(column='ferry_only', aggfunc=any),
+        ).reset_index(drop=False),
+        crs=station_stop_links_gdf.crs
+    )
+    
+    # Assign model_link_id, access for drive,walk,bike,truck,bus
+    max_model_link_id = roadway_net.links_df.model_link_id.max()
+    station_road_links_gdf['model_link_id'] = station_road_links_gdf.index + max_model_link_id + 1
+    station_road_links_gdf['name'] = station_road_links_gdf['stop_name'] + " to " + station_road_links_gdf['next_stop_name']
+    station_road_links_gdf['drive_access'] = False
+    station_road_links_gdf['bike_access'] = False
+    station_road_links_gdf['walk_access'] = False
+    station_road_links_gdf['truck_access'] = False
+    station_road_links_gdf['bus_only'] = False
+    station_road_links_gdf['lanes'] = 0
+    # Set distance
+    station_road_links_gdf.to_crs(local_crs, inplace=True)
+    station_road_links_gdf['length'] = station_road_links_gdf.length
+    if crs_units == "feet": 
+        station_road_links_gdf['distance'] = station_road_links_gdf['length']/FEET_PER_MILE
+    else:
+        station_road_links_gdf['distance'] = station_road_links_gdf['length']/METERS_PER_KILOMETER
+    station_road_links_gdf.to_crs(LAT_LON_CRS, inplace=True)
+
+    # Add to roadway network
+    WranglerLogger.info(f"Adding {len(station_road_links_gdf):,} links to roadway network")
+    WranglerLogger.debug(f"station_road_links_gdf:\n{station_road_links_gdf}")
+    WranglerLogger.debug(f"Before adding links, {len(roadway_net.links_df)=:,}")
+    roadway_net.add_links(station_road_links_gdf)
+    WranglerLogger.debug(f"After adding links, {len(roadway_net.links_df)=:,}")
+
+    WranglerLogger.info(f"Adding {len(station_road_links_gdf):,} shapes to roadway network")
+    roadway_net.add_shapes(station_road_links_gdf)
+    #TODO also return stop_links_df.loc[ not stop_links_df.route_type.isin(STATION_ROUTE_TYPES) ]
+    return stop_id_to_model_node_id_dict
 
 def create_feed_from_gtfs_model(
     gtfs_model: GtfsModel,
@@ -2272,6 +2438,7 @@ def create_feed_from_gtfs_model(
     default_frequency_for_onetime_route: int = 10800,
     add_stations_and_links: bool = True,
     skip_stop_agencies: Optional[List[str]] = None,
+    trace_shape_ids: Optional[List[str]] = None
 ) -> Feed:
     """Converts a GTFS feed to a Wrangler Feed object compatible with the given RoadwayNetwork.
     
@@ -2301,6 +2468,7 @@ def create_feed_from_gtfs_model(
         skip_stop_agencies (Optional[List[str]]): List of agency IDs that use skip-stop patterns.
             Only these agencies will have skip-stop detection applied when creating shapes 
             for station-only route types.
+        trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
 
     Returns:
         Feed: Wrangler Feed object with stops mapped to roadway network nodes
@@ -2326,7 +2494,6 @@ def create_feed_from_gtfs_model(
         if roadway_net.nodes_df.crs is None:
             roadway_net.nodes_df = roadway_net.nodes_df.set_crs(LAT_LON_CRS)
     
-
     # Start with the tables from the GTFS model
     feed_tables = {}
 
@@ -2359,7 +2526,7 @@ def create_feed_from_gtfs_model(
         # GtfsModel specifies every individual trip but Feed expects the trip to be
         # representative with frequencies. This makes that conversion
         create_feed_frequencies(
-            feed_tables, timeperiods, frequency_method, default_frequency_for_onetime_route
+            feed_tables, timeperiods, frequency_method, default_frequency_for_onetime_route, trace_shape_ids
         )
 
     if not add_stations_and_links:
@@ -2368,7 +2535,8 @@ def create_feed_from_gtfs_model(
     # Add helpful extra data to shapes table
     add_additional_data_to_shapes(feed_tables, local_crs, crs_units)
 
-    add_stations_and_links_to_roadway_network(feed_tables, roadway_net)
+    station_id_to_model_node_id_dict = add_stations_and_links_to_roadway_network(
+        feed_tables, roadway_net, local_crs, crs_units, trace_shape_ids)
     raise
 
     # Add transit accessibility attributes to nodes based on connected links
