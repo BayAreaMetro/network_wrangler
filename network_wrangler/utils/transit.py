@@ -1780,7 +1780,7 @@ def create_feed_shapes(
         invalid_shape_links_gdf = invalid_shape_links_gdf.loc[still_invalid_segments]
     
     # revert to previous setting        
-    pd.options.display.min_rows = min_rows
+    pd.options.display.max_rows = max_rows
 
     if len(invalid_shape_links_gdf) > 0:
         # Step 11: Create GeoDataFrames for both valid and invalid shape segments
@@ -2104,8 +2104,9 @@ def add_additional_data_to_shapes(
     matched_count = 0
 
     # Log shape information for trace_shape_ids for debugging
-    pd_min_rows = pd.options.display.min_rows
-    pd.options.display.min_rows = 600 
+    # If max_rows is exceeded, switch to truncate view
+    pd_max_rows = pd.options.display.max_rows
+    pd.options.display.max_rows = 600
 
     # Make sure this is sorted by trip and then stop sequence
     feed_tables['stop_times'].sort_values(by=['trip_id','stop_sequence'], inplace=True)
@@ -2180,8 +2181,9 @@ def add_additional_data_to_shapes(
     
     
     WranglerLogger.info("Finished adding stop information to shapes")
-    # revert to previous pd_min_rows
-    pd.options.display.min_rows = pd_min_rows 
+    # revert to previous pd_max_rows
+    # TEMP - don't commit
+    # pd.options.display.max_rows = pd_max_rows 
 
 def add_stations_and_links_to_roadway_network(
     feed_tables: Dict[str, pd.DataFrame],
@@ -2282,7 +2284,7 @@ def add_stations_and_links_to_roadway_network(
     shape_links_df.loc[ shape_links_df['stop_id'].notna(), 'shape_stop_id'] = np.nan
     if trace_shape_ids:
         WranglerLogger.debug(
-            f"trace shape_links_df:\n"
+            f"trace shape_links_df after ffill():\n"
             f"{shape_links_df.loc[shape_links_df.shape_id.isin(trace_shape_ids)]}"
         )
     # Example: this shape's first stop is stop_sequence=2, the shape points at the beginning are pre-trip points
@@ -2330,16 +2332,25 @@ def add_stations_and_links_to_roadway_network(
         left=stop_links_df,
         right=shape_links_agg_df.rename(columns={'shape_stop_sequence':'stop_sequence'}),
         on=['shape_id','stop_sequence'],
+        how='left',
         indicator=True
     )
     WranglerLogger.debug(f"stop_links_df._merge.value_counts():\n{stop_links_df._merge.value_counts()}")
+    # for links without intermediate shape points
+    stop_links_df.loc[ stop_links_df['_merge'] == 'left_only', 'num_points'] = 0
     if trace_shape_ids:
         WranglerLogger.debug(f"trace stop_links_df:\n{stop_links_df.loc[stop_links_df.shape_id.isin(trace_shape_ids)]}")
 
     # turn them into multi-point lines
     stop_links_df['geometry'] = stop_links_df.apply(
-        lambda row: shapely.geometry.LineString(
-            [row['stop_geometry']] + row['point_list'] +  [row['next_stop_geometry']]), axis=1)
+        lambda row: 
+            # if intermediate points
+            shapely.geometry.LineString([row['stop_geometry']] + 
+                                        row['point_list'] + 
+                                        [row['next_stop_geometry']]) if row['num_points'] > 0 
+            # no intermediate points
+            else shapely.geometry.LineString([row['stop_geometry'], row['next_stop_geometry']]),
+            axis=1)
     WranglerLogger.debug(f"stop_links_df:\n{stop_links_df}")
 
     # create GeoDataFrame; this is in the local crs
