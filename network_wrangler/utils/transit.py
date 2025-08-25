@@ -771,142 +771,144 @@ def create_bus_routes(
     if trace_shape_ids:
         WranglerLogger.debug(f"trace bus_stop_links_gdf:\n{bus_stop_links_gdf.loc[ bus_stop_links_gdf.shape_id.isin(trace_shape_ids)]}")
 
-    #TODO Create a shortest path through the bus network between each consecutive bus stop for a given shape_id,
+    # Create a shortest path through the bus network between each consecutive bus stop for a given shape_id,
     # traversing through intermediate roadway nodes
     # Create new shape links between those nodes
     # Check how far away the new shape links are from the given stop-to-stop shape links
-
-    # TEMP for testing
-    bus_stop_links_gdf = bus_stop_links_gdf.loc[ bus_stop_links_gdf.shape_id.isin(trace_shape_ids)]
-
+    bus_stop_links_gdf.sort_values(by=['shape_id','stop_sequence'], inplace=True)
     G_bus = roadway_net.get_modal_graph('bus')
+    
+    # collect node sequences for these shapes
+    bus_node_sequence = []
+    # also collect failed stop sequences
+    no_path_sequence = []
+
+    current_shape_id = None
+    current_shape_pt_sequence = None
     for idx, row in bus_stop_links_gdf.iterrows():
-        node_a = row['A']
-        node_b = row['B']
-        WranglerLogger.debug(f"{idx} Looking for path from {node_a} to {node_b}")
-        WranglerLogger.debug(f"{row}")
+        # restart for each shape_id
+        if current_shape_id != row['shape_id']:
+            current_shape_pt_sequence = 1
+            current_shape_id = row['shape_id']
+
+        # WranglerLogger.debug(f"{idx} Looking for path from {row['A']} to {row['B']}")
+        # WranglerLogger.debug(f"{row}")
         try:
             # Try to find shortest path
-            path = nx.shortest_path(G_bus, node_a, node_b)
+            path = nx.shortest_path(G_bus, row['A'], row['B'])
             path_length = len(path) - 1  # Number of edges
-            WranglerLogger.debug(f"Found path for {node_a} to {node_b}: {path}")
+            WranglerLogger.debug(f"Found path for {row['A']} to {row['B']}: len={path_length} {path}")
+
+            # Create shape point rows for that path
+            for path_node_id in path:
+                bus_node_dict = {
+                    'shape_id'         : row['shape_id'],
+                    'route_id'         : row['route_id'],
+                    'route_type'       : row['route_type'],
+                    'trip_id'          : row['trip_id'],
+                    'direction_id'     : row['direction_id'],
+                    'shape_pt_sequence': current_shape_pt_sequence,
+                    'model_node_id'    : path_node_id,
+                }
+                # set these for the stops but leave blank for intermediate nodes
+                if path_node_id == row['A']:
+                    bus_node_dict['stop_id']       = row['stop_id']
+                    bus_node_dict['stop_name']     = row['stop_name']
+                    bus_node_dict['stop_sequence'] = row['stop_sequence']
+                elif path_node_id == row['B']:
+                    bus_node_dict['stop_id']       = row['next_stop_id']
+                    bus_node_dict['stop_name']     = row['next_stop_name']
+                    bus_node_dict['stop_sequence'] = last_stop_sequence + 1
+
+                bus_node_sequence.append(bus_node_dict)
+                current_shape_pt_sequence += 1
+                last_stop_sequence = row['stop_sequence']
 
         except nx.NetworkXNoPath as e:
-            WranglerLogger.debug(e)
+            WranglerLogger.warning(f"No path exists from {row['A']} to {row['B']}")
+            WranglerLogger.warning(e)
             # No path exists
+            no_path_sequence.append({
+                'shape_id'      : row['shape_id'],
+                'stop_id'       : row['stop_id'],
+                'next_stop_id'  : row['next_stop_id'],
+                'stop_sequence' : row['stop_sequence'],
+            })
             pass
         except nx.NodeNotFound as e:
-            WranglerLogger.debug(e)
+            WranglerLogger.fatal(f"No node found: {e}")
             pass
 
-        raise Exception("test")
-        
-        # Add new intermediate points to feed_tables['shapes']
-        if new_shape_points:
-            new_points_df = pd.DataFrame(new_shape_points)
-            
-            # If feed_tables['shapes'] is a GeoDataFrame, convert new points too
-            if isinstance(feed_tables['shapes'], gpd.GeoDataFrame):
-                new_points_df['geometry'] = [
-                    shapely.geometry.Point(p['shape_pt_lon'], p['shape_pt_lat']) 
-                    for _, p in new_points_df.iterrows()
-                ]
-                new_points_df = gpd.GeoDataFrame(new_points_df, crs=feed_tables['shapes'].crs)
-            
-            # Append new points and re-sort by shape_id and sequence
-            feed_tables['shapes'] = pd.concat([feed_tables['shapes'], new_points_df], ignore_index=True)
-            feed_tables['shapes'] = feed_tables['shapes'].sort_values(['shape_id', 'shape_pt_sequence'])
-            
-            if row['shape_id'] in random_shape_ids:            
-                WranglerLogger.info(
-                    f"Added {len(new_shape_points):,} intermediate nodes to shapes from pathfinding"
-                )
-                WranglerLogger.debug(f"\n{feed_tables['shapes'].loc[feed_tables['shapes']['shape_id'] == row['shape_id']]}")        
-        # Log summary of resolution attempts
-        if resolved_segments:
-            WranglerLogger.info(
-                f"Resolved {len(resolved_segments):,} segments through pathfinding "
-                f"(found indirect routes through transit network)"
-            )
-        
-        # Update invalid_shape_links_gdf to only include segments that couldn't be resolved
-        invalid_shape_links_gdf = invalid_shape_links_gdf.loc[still_invalid_segments]
+    bus_node_sequence_df = pd.DataFrame(bus_node_sequence)
+    WranglerLogger.debug(f"bus_node_sequence_df:\n{bus_node_sequence_df}")
+
+    if len(no_path_sequence) == 0:
+        WranglerLogger.info(f"All bus route shapes mapped to roadway nodes")
+    else:
+        no_path_sequence_df = pd.DataFrame(no_path_sequence)
+        WranglerLogger.debug(f"no_path_sequence_df:\n{no_path_sequence_df}")
+
+        # join with bus_stop_links_gdf
+        no_bus_path_gdf = gpd.GeoDataFrame(
+            pd.merge(
+                left=no_path_sequence_df,
+                right=bus_stop_links_gdf,
+                how='left',
+                on=['stop_id','next_stop_id','stop_sequence','shape_id'],
+                validate='one_to_one'
+            ), crs=bus_stop_links_gdf.crs)
+        WranglerLogger.debug(f"no_bus_path_gdf:\n{no_bus_path_gdf}")
+        e = TransitValidationError("Some bus stop sequences failed to find paths. See e.no_bus_path_gdf")
+        e.no_bus_path_gdf = no_bus_path_gdf
+        raise e
     
-    # revert to previous setting        
-    pd.options.display.max_rows = max_rows
+    # create bus shapes
+    # current shapes columns:
+    #  shape_id, shape_pt_lat, shape_pt_lon, shape_pt_sequence, shape_dist_traveled, geometry, 
+    #  trip_id, direction_id, route_id, agency_id, route_short_name, route_type, agency_name, match_distance_feet,
+    #  stop_id, stop_name, stop_sequence, model_node_id
 
-    if len(invalid_shape_links_gdf) > 0:
-        # Step 11: Create GeoDataFrames for both valid and invalid shape segments
-        # Convert invalid segments to 2-Point LineString geodataframe
+    # we have:
+    #  shape_id, route_id, route_type, trip_id, direction_id, shape_pt_sequence, model_node_id, stop_id, stop_name
 
-        # If new shape points were added from pathfinding, rebuild shape_links_gdf to include them
-        if new_shape_points:
-            WranglerLogger.info(f"Rebuilding shape links to include {len(new_shape_points):,} new intermediate points from pathfinding")
-            
-            # Rebuild shape_links_gdf with the updated shapes that include new points
-            shape_links_gdf = build_shape_links_gdf(
-                feed_tables['shapes'], 
-                roadway_net.links_df,
-                include_merge_indicator=True
-            )
-            
-            # Update invalid_shape_links_gdf to reflect the new segments
-            invalid_shape_links_gdf = shape_links_gdf[shape_links_gdf['_merge'] == 'left_only'].copy()
-            
-            WranglerLogger.info(f"After including pathfinding points: {len(shape_links_gdf[shape_links_gdf['_merge'] == 'both']):,} valid segments, {len(invalid_shape_links_gdf):,} invalid segments")
-        
-        # invalid_shape_links_gdf already has geometry from build_shape_links_gdf
-        WranglerLogger.debug(f"invalid_shape_links_gdf=\n{invalid_shape_links_gdf}")
-        
-        # Add the valid links between shape points that correspond to roadway links
-        # Get valid segments (where _merge is 'both')
-        valid_shape_links_gdf = shape_links_gdf[shape_links_gdf['_merge'] == 'both'].copy()
-        
-        if len(valid_shape_links_gdf) > 0:
-            # valid_shape_links_gdf already has geometry from build_shape_links_gdf
-            WranglerLogger.info(f"Found {len(valid_shape_links_gdf):,} valid shape segments that correspond to roadway links")
-        else:
-            valid_shape_links_gdf = None
-        
-        # Get unique shape IDs with invalid segments
-        invalid_shape_ids = invalid_shape_links_gdf['shape_id'].unique()
-        
-        # Step 12: Raise TransitValidationError if invalid segments remain after pathfinding
-        # Create error message
-        error_msg = (
-            f"Found {len(invalid_shape_ids):,} shape(s) with {len(invalid_shape_links_gdf):,} invalid segment(s) "
-            f"that don't correspond to roadway links.\n"
-            f"Invalid shapes: {list(invalid_shape_ids[:10])}"
-            f"{'...' if len(invalid_shape_ids) > 10 else ''}\n"
-            f"These segments need corresponding links in the roadway network."
-        )
-        
-        valid_shape_links_gdf['valid'] = True
-        invalid_shape_links_gdf['valid'] = False
-        shape_links_gdf = pd.concat([valid_shape_links_gdf, invalid_shape_links_gdf])
-        
-        # remove lines with the two points having the same location
-        # TODO: Fix this upstream?
-        same_points_gdf = shape_links_gdf.loc[ 
-            (shape_links_gdf.shape_pt_lon==shape_links_gdf.next_pt_lon) &
-            (shape_links_gdf.shape_pt_lat==shape_links_gdf.next_pt_lat)]
-        WranglerLogger.debug(f"Removing lines with A location == B location:\n{same_points_gdf}")
-        shape_links_gdf = shape_links_gdf.loc[
-            (shape_links_gdf.shape_pt_lon != shape_links_gdf.next_pt_lon) |
-            (shape_links_gdf.shape_pt_lat != shape_links_gdf.next_pt_lat)]
+    # Reorder to be similar
+    bus_node_sequence_df = bus_node_sequence_df[[
+        'shape_id', 'shape_pt_sequence',
+        'trip_id', 'direction_id', 'route_id', 'route_type',
+        'stop_id', 'stop_name', 'stop_sequence', 'model_node_id' ]]
+    # get agency_id, route_short_name, agency_name from existing feed_tables['shapes']
+    bus_node_sequence_df = pd.merge(
+        left=bus_node_sequence_df,
+        right=feed_tables['shapes'][['shape_id','agency_id','route_short_name','agency_name']].drop_duplicates(),
+        on='shape_id',
+        how='left',
+        validate='many_to_one'
+    )
 
-        WranglerLogger.debug(f"shape_links_gdf.valid.value_counts(dropna=False):\n{shape_links_gdf.valid.value_counts(dropna=False)}")
+    # get lon, lat and geometry from roadway_net.nodes
+    bus_node_sequence_gdf = gpd.GeoDataFrame(
+        pd.merge(
+            left=bus_node_sequence_df,
+            right=roadway_net.nodes_df[['model_node_id','X','Y','geometry']],
+            how='left',
+            on='model_node_id',
+            validate='many_to_one'
+        ).rename({'X':'shape_pt_lon', 'Y':'shape_pt_lat'}),
+        crs=roadway_net.nodes_df.crs
+    )
+    WranglerLogger.debug(f"Final bus_node_sequence_gdf:\n{bus_node_sequence_gdf}")
 
-        # Raise exception with the invalid segments GeoDataFrame attached
-        exception = TransitValidationError(error_msg)
-        exception.exception_source = "create_feed_shapes"
-        exception.shape_links_gdf = shape_links_gdf
-        exception.invalid_shape_ids = list(invalid_shape_ids)
-        raise exception
+    feed_tables['shapes'].to_crs(LAT_LON_CRS, inplace=True)
+    # replace bus links in feed_tables['shapes'] with bus_node_sequence_gdf
+    feed_tables['shapes'] = pd.concat([
+        feed_tables['shapes'].loc[ ~feed_tables['shapes']['route_type'].isin([RouteType.BUS, RouteType.TROLLEYBUS]) ],
+        bus_node_sequence_gdf
+    ])
 
-    # project back to LAT_LON_CRS
-    # feed_tables['shapes'].set_crs(LAT_LON_CRS, inplace=True)
-    WranglerLogger.debug(f"create_feed_shapes() complete; feed_tables['shapes']:\n{feed_tables['shapes']}")    
+    if trace_shape_ids:
+        WranglerLogger.debug(f"trace shapes:\n{feed_tables['shapes'].loc[ feed_tables['shapes']['shape_id'].isin(trace_shape_ids)]}")
+
+
 
 def add_additional_data_to_stops(
     feed_tables: Dict[str, pd.DataFrame],
@@ -1043,7 +1045,7 @@ def add_additional_data_to_shapes(
     - agency_name (str)
     - route_id (str)
     - route_short_name (str)
-    - route_type (str)
+    - route_type (int)
 
     Additionally, this method then finds the shape points that are closest to
     stops along this trip. Those shape points *are moved to the stop
@@ -1687,7 +1689,10 @@ def create_feed_from_gtfs_model(
 
     # finally, we need to find shortest paths through the bus network
     # between bus stops and update stops and shapes accordingly
-    create_bus_routes(bus_stop_links_gdf, feed_tables, roadway_net, local_crs, crs_units, trace_shape_ids)
+    try:
+        create_bus_routes(bus_stop_links_gdf, feed_tables, roadway_net, local_crs, crs_units, trace_shape_ids)
+    except Exception as e:
+        raise e
 
     # temporary
     e = Exception("This is not a real exception but just for testing")
