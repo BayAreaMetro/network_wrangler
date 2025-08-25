@@ -1944,6 +1944,65 @@ def create_feed_from_gtfs_model(
     # Getting ready to create Feed object
     # stop_id is now really the model_node_id -- set it
     feed_tables['stops'].rename(columns={'stop_id':'orig_stop_id', 'model_node_id':'stop_id'}, inplace=True)
+    # But some of the stops are mapped the the same model_node_id (now, stop_id) -- merge them.
+    duplicate_stop_ids_df = feed_tables['stops'].loc[ feed_tables['stops'].duplicated(subset=['stop_id'], keep=False) ]
+    WranglerLogger.debug(f"duplicate_stop_ids_df:\n{duplicate_stop_ids_df}")
+    WranglerLogger.debug(f"feed_tables['stops'].dtypes:\n{feed_tables['stops'].dtypes}")
+    # orig_stop_id                     object
+    # stop_name                        object
+    # stop_lat                        float64
+    # stop_lon                        float64
+    # zone_id                          object
+    # location_type                  category
+    # parent_station                   object
+    # level_id                         object
+    # geometry                       geometry
+    # agency_ids                       object
+    # agency_names                     object
+    # route_ids                        object
+    # route_names                      object
+    # route_types                      object
+    # shape_ids                        object
+    # stop_in_mixed_traffic            object
+    # child_stop_in_mixed_traffic        bool
+    # is_parent                          bool
+    # is_bus_stop                        bool
+    # stop_id                          object
+    # match_distance_feet             float64
+    # valid_match                      object
+    
+    # Convert NaN to empty lists before aggregation
+    feed_tables['stops']['agency_ids']   = feed_tables['stops']['agency_ids'].apply(lambda x: x if isinstance(x, list) else [])
+    feed_tables['stops']['agency_names'] = feed_tables['stops']['agency_names'].apply(lambda x: x if isinstance(x, list) else [])
+    feed_tables['stops']['route_ids']    = feed_tables['stops']['route_ids'].apply(lambda x: x if isinstance(x, list) else [])
+    feed_tables['stops']['route_names']  = feed_tables['stops']['route_names'].apply(lambda x: x if isinstance(x, list) else [])
+    feed_tables['stops']['route_types']  = feed_tables['stops']['route_types'].apply(lambda x: x if isinstance(x, list) else [])
+    feed_tables['stops']['shape_ids']    = feed_tables['stops']['shape_ids'].apply(lambda x: x if isinstance(x, list) else [])
+
+    feed_tables['stops'] = feed_tables['stops'].groupby(by=['stop_id']).aggregate(
+        orig_stop_id               = pd.NamedAgg(column='orig_stop_id',   aggfunc=list),
+        stop_name                  = pd.NamedAgg(column='stop_name',      aggfunc=list),
+        stop_lat                   = pd.NamedAgg(column='stop_lat',       aggfunc='first'),
+        stop_lon                   = pd.NamedAgg(column='stop_lon',       aggfunc='first'),
+        zone_id                    = pd.NamedAgg(column='zone_id',        aggfunc=list),
+        location_type              = pd.NamedAgg(column='location_type',  aggfunc='first'),
+        parent_station             = pd.NamedAgg(column='parent_station', aggfunc='first'),
+        level_id                   = pd.NamedAgg(column='level_id',       aggfunc=list),
+        geometry                   = pd.NamedAgg(column='geometry',       aggfunc='first'),
+        agency_ids                 = pd.NamedAgg(column='agency_ids',     aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        agency_names               = pd.NamedAgg(column='agency_names',   aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        route_ids                  = pd.NamedAgg(column='route_ids',      aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        route_names                = pd.NamedAgg(column='route_names',    aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        route_types                = pd.NamedAgg(column='route_types',    aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        shape_ids                  = pd.NamedAgg(column='shape_ids',      aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        stop_in_mixed_traffic      = pd.NamedAgg(column='stop_in_mixed_traffic',  aggfunc=any),
+        child_stop_in_mixed_traffic= pd.NamedAgg(column='child_stop_in_mixed_traffic', aggfunc=any),
+        is_parent                  = pd.NamedAgg(column='is_parent',      aggfunc=any),
+        is_bus_stop                = pd.NamedAgg(column='is_bus_stop',    aggfunc=any),
+    ).reset_index(drop=False)
+    feed_tables['stops']['stop_id'] = feed_tables['stops']['stop_id'].astype(int)
+
+    # Log all tables
     for table_name in feed_tables.keys():
         WranglerLogger.debug(f"Before creating Feed object, feed_tables[{table_name}]:\n{feed_tables[table_name]}")
 
