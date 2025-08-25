@@ -823,7 +823,7 @@ def create_bus_routes(
     Modifies feed_tables['shapes'] in place:
     - Removes existing bus/trolleybus shapes
     - Adds new shapes with points following road network paths
-    - Each shape point has model_node_id from roadway network
+    - Each shape point has shape_model_node_id from roadway network
     - Stop points retain stop_id, stop_name, stop_sequence
     
     Args:
@@ -895,13 +895,13 @@ def create_bus_routes(
             # Create shape point rows for that path
             for path_node_id in path:
                 bus_node_dict = {
-                    'shape_id'         : row['shape_id'],
-                    'route_id'         : row['route_id'],
-                    'route_type'       : row['route_type'],
-                    'trip_id'          : row['trip_id'],
-                    'direction_id'     : row['direction_id'],
-                    'shape_pt_sequence': current_shape_pt_sequence,
-                    'model_node_id'    : path_node_id,
+                    'shape_id'            : row['shape_id'],
+                    'route_id'            : row['route_id'],
+                    'route_type'          : row['route_type'],
+                    'trip_id'             : row['trip_id'],
+                    'direction_id'        : row['direction_id'],
+                    'shape_pt_sequence'   : current_shape_pt_sequence,
+                    'shape_model_node_id' : path_node_id,
                 }
                 # set these for the stops but leave blank for intermediate nodes
                 if path_node_id == row['A']:
@@ -959,16 +959,16 @@ def create_bus_routes(
     # current shapes columns:
     #  shape_id, shape_pt_lat, shape_pt_lon, shape_pt_sequence, shape_dist_traveled, geometry, 
     #  trip_id, direction_id, route_id, agency_id, route_short_name, route_type, agency_name, match_distance_feet,
-    #  stop_id, stop_name, stop_sequence, model_node_id
+    #  stop_id, stop_name, stop_sequence, shape_model_node_id
 
     # we have:
-    #  shape_id, route_id, route_type, trip_id, direction_id, shape_pt_sequence, model_node_id, stop_id, stop_name
+    #  shape_id, route_id, route_type, trip_id, direction_id, shape_pt_sequence, shape_model_node_id, stop_id, stop_name
 
     # Reorder to be similar
     bus_node_sequence_df = bus_node_sequence_df[[
         'shape_id', 'shape_pt_sequence',
         'trip_id', 'direction_id', 'route_id', 'route_type',
-        'stop_id', 'stop_name', 'stop_sequence', 'model_node_id' ]]
+        'stop_id', 'stop_name', 'stop_sequence', 'shape_model_node_id' ]]
     # get agency_id, route_short_name, agency_name from existing feed_tables['shapes']
     bus_node_sequence_df = pd.merge(
         left=bus_node_sequence_df,
@@ -982,9 +982,9 @@ def create_bus_routes(
     bus_node_sequence_gdf = gpd.GeoDataFrame(
         pd.merge(
             left=bus_node_sequence_df,
-            right=roadway_net.nodes_df[['model_node_id','X','Y','geometry']],
+            right=roadway_net.nodes_df[['model_node_id','X','Y','geometry']].rename(columns={'model_node_id':'shape_model_node_id'}),
             how='left',
-            on='model_node_id',
+            on='shape_model_node_id',
             validate='many_to_one'
         ).rename(columns={'X':'shape_pt_lon', 'Y':'shape_pt_lat'}),
         crs=roadway_net.nodes_df.crs
@@ -999,7 +999,11 @@ def create_bus_routes(
     ])
 
     if trace_shape_ids:
-        WranglerLogger.debug(f"trace shapes:\n{feed_tables['shapes'].loc[ feed_tables['shapes']['shape_id'].isin(trace_shape_ids)]}")
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace feed_tables['shapes'] for {trace_shape_id} at the end of create_bus_routes():\n"
+                f"{feed_tables['shapes'].loc[ feed_tables['shapes']['shape_id']==trace_shape_id]}"
+            )
 
 
 
@@ -1598,14 +1602,18 @@ def add_stations_and_links_to_roadway_network(
     # Filter to STATION_ROUTE_TYPES for adding to the roadway network
     station_stop_links_gdf = stop_links_gdf.loc[ stop_links_gdf.route_type.isin(STATION_ROUTE_TYPES) ].copy()
     station_stop_id_set = set(station_stop_links_gdf['stop_id']) | set(station_stop_links_gdf['next_stop_id'])
+    # Also add parent stations
+    parent_station_id_set = set(feed_tables['stops'].loc[ feed_tables['stops']['is_parent'] == True, 'stop_id'].tolist())
+    WranglerLogger.debug(f"parent_station_id_set len={len(parent_station_id_set)}:\n{parent_station_id_set}")
 
     if trace_shape_ids:
         WranglerLogger.debug(f"trace station_stop_links_gdf:\n{station_stop_links_gdf.loc[ station_stop_links_gdf.shape_id.isin(trace_shape_ids)]}")
 
-    # Prepare nodes to add
+    # Prepare nodes to add - station stops and parent stops
     station_stop_ids_gdf = feed_tables['stops'].loc[ 
-        feed_tables['stops']['stop_id'].isin(station_stop_id_set), 
-        ['stop_id','stop_name','stop_lat','stop_lon','model_node_id','geometry'] ].reset_index(drop=True).copy()
+        (feed_tables['stops']['stop_id'].isin(station_stop_id_set)) |
+        (feed_tables['stops']['stop_id'].isin(parent_station_id_set)), 
+        ['stop_id','stop_name','is_parent','stop_lat','stop_lon','model_node_id','geometry'] ].reset_index(drop=True).copy()
     station_stop_ids_gdf.rename(columns={'stop_lon':'X', 'stop_lat':'Y'}, inplace=True)
     station_stop_ids_gdf.to_crs(LAT_LON_CRS, inplace=True)
     WranglerLogger.debug(f"station_stop_ids_gdf:\n{station_stop_ids_gdf}")
@@ -1933,8 +1941,11 @@ def create_feed_from_gtfs_model(
     except Exception as e:
         raise e
     
+    # Getting ready to create Feed object
+    # stop_id is now really the model_node_id -- set it
+    feed_tables['stops'].rename(columns={'stop_id':'orig_stop_id', 'model_node_id':'stop_id'}, inplace=True)
     for table_name in feed_tables.keys():
-        WranglerLogger.debug(f"feed_tables[{table_name}]:\n{feed_tables[table_name]}")
+        WranglerLogger.debug(f"Before creating Feed object, feed_tables[{table_name}]:\n{feed_tables[table_name]}")
 
     # create Feed object from results of the above
     try:
