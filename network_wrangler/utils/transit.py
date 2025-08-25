@@ -111,46 +111,53 @@ def create_feed_frequencies(
     default_frequency_for_onetime_route: int = 10800,
     trace_shape_ids: Optional[List[str]] = None
 ):
-    """Create a frequencies and convert GTFS-style tables to Wrangler-style Feed tables.
+    """Create frequencies table and convert GTFS-style tables to Wrangler-style Feed tables.
 
-    This function is used for converting a GtfsModel to a Feed object.
-    While a GtfsModel typically specifies each individual transit trip run as a
-    series of stop_times, the Wrangler Feed object assumes a simplified schedule:
-    a smaller set of trips and a set of headways or frequencies for those trips throughout
-    a timeperiod.
+    This function transforms detailed GTFS trip schedules into a frequency-based representation
+    used by the Wrangler Feed object. While GTFS specifies each individual transit trip with
+    exact times, Wrangler uses representative trips with headways/frequencies for time periods.
 
-    This function assumes that the GtfsModel's shape_id corresponds to a unique
-    route, trip, direction, and stop pattern, so these shape_ids will be used to determine
-    frequencies for its trips within each timeperiod.
+    Process Steps:
+    1. Adds route_id, direction_id, shape_id to stop_times from trips table
+    2. Adds departure_minutes column (minutes after midnight) to stop_times
+    3. Groups trips by stop pattern to verify consistency per shape_id
+    4. Assigns each trip to a time period based on departure time
+    5. Calculates headways using the specified frequency_method
+    6. Creates new trip_ids based on shape_id (one trip per unique shape)
+    7. Updates stop_times and trips tables to use new consolidated trip definitions
 
     See [GTFS frequencies.txt](https://gtfs.org/documentation/schedule/reference/#frequenciestxt)
 
     Args:
-        feed_tables (Dict[str, pd.DataFrame]): Dictionary of feed tables including:
-            - 'stop_times': Wrangler-formatted stop times table
-            - 'trips': Trips table with route information
-        timeperiods (Dict[str, Tuple[str, str]],): Dictionary of time period label to timespan for frequencies.
-            Example: { 'EA': ['03:00','06:00], ...]
-        frequency_method (str): one of 'uniform_headway', 'mean_headway' or 'median_headway'. 
-            This determines how the frequencies are calculated per timeperiod, after each trip
-            is assigned to a timeperiod based on the trip's departure time.
-            'uniform_headway' means the timeperiod_duration is divided by the number of trips.
-            The other two look at the time between trips during the timeperiod.
+        feed_tables (Dict[str, pd.DataFrame]): Dictionary of feed tables to modify in place:
+            Required input columns:
+            - 'stop_times': trip_id, stop_id, stop_sequence, departure_time
+            - 'trips': trip_id, route_id, direction_id, shape_id, service_id
+            
+            Columns added/modified:
+            - 'stop_times': Adds route_id, direction_id, shape_id, departure_minutes;
+                           Renames trip_id to orig_trip_id, creates new trip_id from shape_id
+            - 'trips': Consolidated to one row per shape_id with new trip_id
+            - 'frequencies': Created with trip_id, start_time, end_time, headway_secs
+            
+        timeperiods (Dict[str, Tuple[str, str]]): Time period labels to time spans.
+            Example: {'EA': ('03:00','06:00'), 'AM': ('06:00','10:00')}
+        frequency_method (str): Method for calculating headways:
+            - 'uniform_headway': timeperiod_duration / number_of_trips
+            - 'mean_headway': mean of time gaps between consecutive trips
+            - 'median_headway': median of time gaps between consecutive trips
         default_frequency_for_onetime_route (int, optional): Default headway in seconds
             for routes with only one trip in a period. Defaults to 10800 (3 hours).
-        trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
+        trace_shape_ids (Optional[List[str]]): Shape IDs to log detailed debug output for.
 
     Returns:
-        None
+        None - Modifies feed_tables in place
 
     Notes:
-        - For routes with only one trip in a period, uses the default_frequency_for_onetime_route
-        - Handles time periods that cross midnight (e.g., '19:00:00' to '03:00:00')
-        - Creates feed_tables['frequencies'] to be compatible with a WranglerFrequenciesTable.
-        - Updates feed_tables['trips'] to correspond to the new trip definition, so each
-          trip is representative of a route/direction/shape (e.g. stop pattern).
-          The first occurance of this trip in the original list is assumed to be respresentative
-          for the other columns in this table.
+        - Assumes shape_id uniquely identifies a route/direction/stop pattern combination
+        - Handles time periods crossing midnight (e.g., '19:00' to '03:00')
+        - For single-trip routes, uses default_frequency_for_onetime_route
+        - Original trip_ids are preserved as 'orig_trip_id' for reference
     """
     WranglerLogger.info("Creating frequencies table from feed stop_times data")
 
@@ -410,11 +417,26 @@ def create_feed_frequencies(
 def build_transit_graph(transit_links_df: pd.DataFrame) -> Dict[int, set]:
     """Build directed adjacency graph from transit links.
     
+    Creates a dictionary-based graph representation where each node maps to a set of
+    directly reachable nodes. The graph is directed, respecting the A->B direction
+    of links. Self-loops are not included by default.
+    
     Args:
-        transit_links_df: DataFrame of links with transit-only links, must have columns A and B
+        transit_links_df: DataFrame of transit links with required columns:
+            - A (int): Source node ID
+            - B (int): Target node ID
         
     Returns:
-        Dict mapping node_id to set of reachable node_ids (following link direction)
+        Dict[int, set]: Adjacency dictionary where:
+            - Keys are node IDs that appear in the links
+            - Values are sets of node IDs directly reachable from that node
+            - Empty set for nodes with no outgoing edges
+    
+    Example:
+        >>> links_df = pd.DataFrame({'A': [1, 2, 3], 'B': [2, 3, 1]})
+        >>> graph = build_transit_graph(links_df)
+        >>> graph
+        {1: {2}, 2: {3}, 3: {1}}
     """
     graph = {}
     for _, link in transit_links_df.iterrows():
@@ -435,27 +457,55 @@ def match_bus_stops_to_roadway_nodes(
     max_distance: float,
     trace_shape_ids: Optional[List[str]] = None
 ):
-    """Match bus stops to drive-accessible nodes in the roadway network.
+    """Match bus stops to bus-accessible nodes in the roadway network.
     
-    This matches bus stops to to the nearest drive-accessible nodes in the roadway network.
-    It updates feed_tables['stops'] in place, adding new columns:
-     is_bus_stop, model_node_id, match_distance_{crs_units} and valid_match.
-    For rows with valid_match, updates the stop location to be that of the road node.
-
-    It also updates feed_tables['shapes'] in place, adding new column:
-      'model_node_id' for the bus stop shape points.
-    For rows with valid stop matches, updates the shape location to the stop location
-      (which is the road node location), as well as match_distance_{crs_units}
+    Matches bus and trolleybus stops to the nearest bus-accessible nodes in the roadway
+    network using spatial proximity. Updates stop and shape locations to snap to road nodes.
+    
+    Process Steps:
+    1. Identifies bus stops (route_types BUS or TROLLEYBUS) in feed_tables['stops']
+    2. Builds bus network graph from roadway to find accessible nodes
+    3. Projects geometries to local CRS for accurate distance calculations
+    4. Uses BallTree spatial index to find nearest bus-accessible node for each stop
+    5. Updates stop locations to matched road node locations (if within max_distance)
+    6. Updates shape point locations for matched bus stops
+    
+    Modifies feed_tables in place:
+    
+    feed_tables['stops'] - Adds/modifies columns:
+        - is_bus_stop (bool): True if stop serves BUS or TROLLEYBUS routes
+        - model_node_id (int): Matched roadway node ID (None if no valid match)
+        - match_distance_{crs_units} (float): Distance to matched node
+        - valid_match (bool): True if match found within max_distance
+        - stop_lon, stop_lat, geometry: Updated to road node location if valid_match
+    
+    feed_tables['shapes'] - Adds/modifies columns:
+        - model_node_id (int): Matched roadway node ID for bus stops
+        - match_distance_{crs_units} (float): Distance to matched node
+        - shape_pt_lon, shape_pt_lat, geometry: Updated to road node location if valid match
+    
+    feed_tables['stop_times'] - If GeoDataFrame, updates:
+        - geometry: Updated to matched road node location for bus stops
     
     Args:
-        feed_tables: Dictionary of GTFS feed tables including stops and shapes
-        roadway_net: RoadwayNetwork containing nodes with drive_access information
-        local_crs: Coordinate reference system to use for projection, in feet. (e.g., "EPSG:2227")
-        crs_units: 'feet' or 'meters', corresonding to local_crs
-        max_distance: Maximum allowed distance from stop to node in crs_units
+        feed_tables: Dictionary of GTFS feed tables. Expects:
+            - 'stops': Must have route_types column (list of RouteType enums)
+            - 'shapes': Shape points to update
+            - 'stop_times': Optional, updated if present as GeoDataFrame
+        roadway_net: RoadwayNetwork with nodes to match against.
+            Will be converted to GeoDataFrame if needed.
+        local_crs: Coordinate reference system for projections (e.g., "EPSG:2227")
+        crs_units: Distance units for local_crs ('feet' or 'meters')
+        max_distance: Maximum matching distance in crs_units
+        trace_shape_ids: Optional list of shape_ids for debug logging
+        
+    Raises:
+        TransitValidationError: If no bus-accessible nodes found near any bus stops
         
     Notes:
-        If roadway_net.nodes_df is not a GeoDataFrame, converts it to one.
+        - Only matches stops that serve BUS or TROLLEYBUS routes
+        - Uses bus modal graph to ensure matched nodes are bus-accessible
+        - Preserves original locations for non-bus stops
     """
     if crs_units not in ["feet","meters"]:
         raise ValueError(f"crs_units must be on of 'feet' or 'meters'; received {crs_units}")
@@ -645,31 +695,46 @@ def build_shape_links_gdf(
 ) -> gpd.GeoDataFrame:
     """Build a GeoDataFrame of shape segment links from consecutive shape points.
     
-    This function creates a GeoDataFrame where each row represents a segment between
-    consecutive shape points as a LineString geometry, with information about whether 
-    that segment corresponds to an actual roadway link.
+    Creates LineString geometries connecting consecutive shape points and identifies
+    which segments correspond to actual roadway links. Filters out self-loops where
+    consecutive points have the same node ID.
+    
+    Process Steps:
+    1. Sorts shape points by shape_id and shape_pt_sequence
+    2. Groups consecutive points within each shape using shift operations
+    3. Filters out self-loops (where shape_model_node_id == next_node)
+    4. Creates LineString geometries for each segment
+    5. Left joins with roadway links to identify valid road segments
     
     Args:
-        shapes_df: DataFrame with shape points, must contain:
-            - shape_id: Shape identifier
-            - shape_pt_sequence: Order of points in shape
-            - shape_model_node_id: Roadway node ID for this shape point
-            - shape_pt_lat: Latitude of shape point
-            - shape_pt_lon: Longitude of shape point
-        roadway_links_df: DataFrame of roadway links with columns A, B, model_link_id
-        include_merge_indicator: If True, includes _merge column indicating join result
+        shapes_df: DataFrame with shape points, required columns:
+            - shape_id (str): Shape identifier
+            - shape_pt_sequence (int): Order of points in shape
+            - shape_model_node_id (int): Roadway node ID for this shape point
+            - shape_pt_lat (float): Latitude of shape point
+            - shape_pt_lon (float): Longitude of shape point
+        roadway_links_df: DataFrame of roadway links, required columns:
+            - A (int): Source node ID
+            - B (int): Target node ID
+            - model_link_id (int): Unique link identifier
+        include_merge_indicator: If True, includes _merge column from join
             
     Returns:
-        GeoDataFrame with one row per shape segment containing:
-            - All columns from shapes_df
-            - next_node: The next node in the sequence
-            - next_pt_lat: Latitude of next point
-            - next_pt_lon: Longitude of next point
-            - A: Source node ID (same as shape_model_node_id)
-            - B: Target node ID (same as next_node)
-            - model_link_id: Link ID if segment matches a roadway link, NaN otherwise
-            - _merge: Join indicator ('both', 'left_only') if include_merge_indicator=True
-            - geometry: LineString geometry of the segment in LAT_LON_CRS
+        GeoDataFrame with one row per shape segment:
+            - All columns from input shapes_df
+            - next_node (int): Next node ID in sequence
+            - next_pt_lat (float): Latitude of next point
+            - next_pt_lon (float): Longitude of next point
+            - A (int): Source node ID (copy of shape_model_node_id)
+            - B (int): Target node ID (copy of next_node)
+            - model_link_id (float): Road link ID if segment matches, NaN otherwise
+            - _merge (str): Join result ('both', 'left_only') if requested
+            - geometry: LineString connecting consecutive points in LAT_LON_CRS
+            
+    Notes:
+        - Last point of each shape is excluded (no next point to connect to)
+        - Self-loops are automatically filtered out
+        - Segments not matching roadway links will have NaN model_link_id
     """
     # Sort shapes by shape_id and sequence
     shape_links_df = shapes_df.sort_values(['shape_id', 'shape_pt_sequence']).copy()
@@ -733,33 +798,53 @@ def create_bus_routes(
     crs_units: str,
     trace_shape_ids: Optional[List[str]] = None
 ):
-    """Find shortest paths through the bus network between stops.
+    """Find shortest paths through the bus network between consecutive bus stops.
     
-    Major steps: [to fill in]
+    Replaces original bus route shapes with new shapes that follow the actual bus network
+    by finding shortest paths between consecutive stops through bus-accessible roads.
+    
+    Process Steps:
+    1. Sorts bus stop links by shape_id and stop_sequence
+    2. Gets bus modal graph from roadway network
+    3. For each consecutive stop pair in each shape:
+       - Finds shortest path through bus network using NetworkX
+       - Creates shape points for all nodes in the path
+       - Preserves stop information at stop nodes
+    4. Replaces bus shapes in feed_tables['shapes'] with new routed shapes
+    
+    Modifies feed_tables['shapes'] in place:
+    - Removes existing bus/trolleybus shapes
+    - Adds new shapes with points following road network paths
+    - Each shape point has model_node_id from roadway network
+    - Stop points retain stop_id, stop_name, stop_sequence
     
     Args:
-        bus_stop_links_gdf (gpd.GeoDataFrame): GeoDataFrame containing 
-            stop links for bus routes that were not added to the roadway network,
-            created by add_stations_and_links_to_roadway_network()
-        feed_tables: Current Feed tables, including stops and shapes.
-            Expects feed_tables['stops'] to have column, is_bus_stop
-            Expects feed_tables['shapes'] to have column, route_type
-        roadway_net: RoadwayNetwork object containing nodes to match against
-        local_crs: Local coordinate reference system for projection
-        crs_units: 'feet' or 'meters', corresonding to local_crs
-        trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
+        bus_stop_links_gdf: GeoDataFrame of bus stop pairs, required columns:
+            - shape_id (str): Shape identifier  
+            - stop_sequence (int): Stop order in route
+            - stop_id (str): Current stop ID
+            - stop_name (str): Current stop name
+            - next_stop_id (str): Next stop ID
+            - next_stop_name (str): Next stop name
+            - A (int): Current stop's model_node_id
+            - B (int): Next stop's model_node_id
+            - route_id, route_type, trip_id, direction_id: Route metadata
+        feed_tables: Dictionary with required tables:
+            - 'stops': Must have is_bus_stop column
+            - 'shapes': Will be modified to replace bus shapes
+        roadway_net: RoadwayNetwork with bus modal graph
+        local_crs: Coordinate reference system for projections
+        crs_units: Distance units ('feet' or 'meters')
+        trace_shape_ids: Optional shape IDs for debug logging
     
     Raises:
-        TransitValidationError: If any stop sequences don't correspond to roadway links. The exception contains:
-
-            - exception_source: 'match_stops_with_connectivity_for_stations'
-            - failed_connectivity_sequences: a list of dictionaries with detailed
-
-        TransitValidationError: If any shape segments don't correspond to roadway links. The exception contains:
-
-            - exception_source: 'create_feed_shapes'
-            - shape_links_gdf: GeoDataFrame with LineString geometries of shape sequences
-            - invalid_shape_ids: List of shape IDs that have invalid segments
+        TransitValidationError: If no path exists between any consecutive stops.
+            Exception includes no_bus_path_gdf with failed stop sequences.
+            
+    Notes:
+        - Uses NetworkX shortest_path for routing
+        - Intermediate nodes between stops are added as shape points
+        - Original shape geometry is replaced with routed paths
     """
     if crs_units not in ["feet","meters"]:
         raise ValueError(f"crs_units must be on of 'feet' or 'meters'; received {crs_units}")
@@ -913,21 +998,47 @@ def create_bus_routes(
 def add_additional_data_to_stops(
     feed_tables: Dict[str, pd.DataFrame],
 ):
-    """Updates feed_tables['stops'] with additional metadata about those stops.
-
-    Adds the following columns to feed_tables['stops']:
-   
-    - agency_ids (list of str)
-    - agency_names (list of str)
-    - route_ids (list of str)
-    - route_names (list of str)
-    - route_types (list of int)
-    - shape_ids (list of str)
-    - stop_in_mixed_traffic (bool): True if any route_type associated with the stop is one of
-      MIXED_TRAFFIC_ONLY_ROUTE_TYPES
-    - is_parent (bool): True of another stop refers to this as their parent_station
-    - child_stop_in_mixed_traffic (bool): True iff any of the child stops has 
-      stop_in_mixed_traffic == True
+    """Updates feed_tables['stops'] with additional metadata about routes and agencies.
+    
+    Aggregates information from stop_times, trips, routes, and agencies tables to add
+    comprehensive metadata about which routes and agencies serve each stop.
+    
+    Process Steps:
+    1. Joins stop_times with trips to get route and shape information
+    2. Joins with routes and agencies to get route types and agency names
+    3. Groups by stop_id to aggregate all serving routes/agencies
+    4. Identifies mixed-traffic stops based on route types
+    5. Handles parent stations by checking child stop characteristics
+    
+    Modifies feed_tables['stops'] in place, adding columns:
+    
+    Route/Agency Information:
+    - agency_ids (list of str): All agencies serving this stop
+    - agency_names (list of str): Names of agencies serving this stop
+    - route_ids (list of str): All routes serving this stop
+    - route_names (list of str): Short names of routes serving this stop
+    - route_types (list of int): Types of routes serving this stop
+    - shape_ids (list of str): All shapes associated with this stop
+    
+    Stop Type Flags:
+    - stop_in_mixed_traffic (bool): True if stop serves any MIXED_TRAFFIC_ONLY_ROUTE_TYPES
+        (currently only BUS and TROLLEYBUS)
+    - is_parent (bool): True if other stops reference this as parent_station
+    - child_stop_in_mixed_traffic (bool): True if any child stop has stop_in_mixed_traffic=True
+        (only set for parent stations)
+    
+    Args:
+        feed_tables: Dictionary with required tables:
+            - 'stop_times': Links stops to trips
+            - 'trips': Links trips to routes and shapes
+            - 'routes': Route information including type
+            - 'agencies': Agency names
+            - 'stops': Table to be updated
+            
+    Notes:
+        - Parent stations may not appear in trips but are retained if referenced
+        - Empty lists are used for stops with no associated routes
+        - Handles missing parent_station column gracefully
     """
 
     # Add information about agencies, routes, directions and shapes to stops
@@ -1029,37 +1140,61 @@ def add_additional_data_to_shapes(
     crs_units: str,
     trace_shape_ids: Optional[List[str]] = None
 ):
-    """Updates feed_tables['shapes'] with additional metadata about those shapes.
-
-    Convert shapes to GeoDataFrame if needed and add geometry from lat/lon coordinates.
-
-    This assumes add_additional_data_to_shapes() has already run, so each shape
-    corresponds to one trip_id, agency_id, agency_name, route_id, direction_id.
-    Adds the following columns to feed_tables['shapes']:
-   
-    Basic data from other tables:
-
-    - trip_id (str)
-    - direction_id (int)
-    - agency_id (str)
-    - agency_name (str)
-    - route_id (str)
-    - route_short_name (str)
-    - route_type (int)
-
-    Additionally, this method then finds the shape points that are closest to
-    stops along this trip. Those shape points *are moved to the stop
-    location* and the following columns are set:
-
-    - stop_id
-    - stop_name
-    - match_distance_{crs_units} (distance from original shape location to stop location)
-
+    """Updates feed_tables['shapes'] with route/trip metadata and snaps shape points to stops.
+    
+    Enriches shape points with information from trips, routes, and agencies tables,
+    then matches shape points to nearby stops and updates their locations.
+    
+    Process Steps:
+    1. Converts shapes to GeoDataFrame if needed (using shape_pt_lon/lat)
+    2. Joins with trips, routes, and agencies to add metadata
+    3. Projects to local CRS for distance calculations
+    4. For each shape, finds nearest shape point to each stop
+    5. Updates matched shape points to stop locations
+    6. Records match distance for quality assessment
+    
+    Assumes create_feed_frequencies() has already run, so each shape corresponds
+    to one consolidated trip_id.
+    
+    Modifies feed_tables in place:
+    
+    feed_tables['shapes'] - Adds/modifies columns:
+        Route/Trip Metadata:
+        - trip_id (str): Associated trip ID
+        - direction_id (int): Direction of travel (0 or 1)
+        - route_id (str): Route identifier
+        - agency_id (str): Agency identifier
+        - agency_name (str): Agency name
+        - route_short_name (str): Route short name
+        - route_type (int): GTFS route type
+        
+        Stop Matching (for matched points only):
+        - stop_id (str): Matched stop ID
+        - stop_name (str): Matched stop name  
+        - stop_sequence (int): Order of stop in trip
+        - match_distance_{crs_units} (float): Distance from original to stop location
+        - shape_pt_lon, shape_pt_lat: Updated to stop coordinates
+        - geometry: Updated to stop location
+    
+    feed_tables['stop_times'] - Converted to GeoDataFrame with:
+        - geometry: Stop location added from stops table
+    
     Args:
-        local_crs: Local coordinate reference system for projection
-        crs_units: 'feet' or 'meters', corresonding to local_crs
-        trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
-
+        feed_tables: Dictionary with required tables:
+            - 'shapes': Shape points to update
+            - 'trips': Trip information
+            - 'routes': Route information
+            - 'agencies': Agency information
+            - 'stops': Stop locations
+            - 'stop_times': Stop sequences
+        local_crs: Coordinate reference system for projections
+        crs_units: Distance units ('feet' or 'meters')
+        trace_shape_ids: Optional shape IDs for debug logging
+        
+    Notes:
+        - Uses BallTree for efficient nearest neighbor search
+        - Only updates closest shape point to each stop
+        - Preserves original locations for unmatched shape points
     """
     # Step 1: Convert shapes to GeoDataFrame if needed and add geometry from lat/lon coordinates
     # Create GeoDataFrame from shape points if not already one
@@ -1236,26 +1371,59 @@ def add_stations_and_links_to_roadway_network(
     crs_units: str,
     trace_shape_ids: Optional[List[str]] = None
 ) -> Tuple[Dict[str,int], gpd.GeoDataFrame]:
-    """Add nodes and links for transit stations and links to the given RoadwayNetwork.
+    """Add transit station nodes and dedicated transit links to the roadway network.
 
-    For routes that are STATION_ROUTE_TYPES, this function modifies the roadway_net in place.
-    Add nodes first, then links.
-
+    Creates new roadway nodes for transit stations and adds dedicated transit links
+    between stations for fixed-guideway transit (rail, subway, ferry, etc.). Bus stops
+    use existing roadway nodes from match_bus_stops_to_roadway_nodes().
+    
+    Process Steps:
+    1. Creates stop link pairs from consecutive stops in stop_times
+    2. Aggregates intermediate shape points between stops into multi-point lines
+    3. Filters links to STATION_ROUTE_TYPES for network addition
+    4. Creates new roadway nodes for stations not already in network
+    5. Creates dedicated transit links with appropriate access restrictions
+    6. Updates feed_tables['stops'] with model_node_id for all stops
+    7. Returns bus stop links separately (not added to network)
+    
+    Modifies in place:
+    
+    roadway_net - Adds:
+        - New nodes for transit stations with model_node_id
+        - New links between stations with:
+            - rail_only=True for rail types
+            - ferry_only=True for ferry types  
+            - drive/bike/walk/truck_access=False
+            - Geometry following shape points if available
+            
+    feed_tables['stops'] - Adds/updates:
+        - model_node_id (int): Roadway node ID for the stop
+        - Updates existing bus stop model_node_ids
+        - Adds new station model_node_ids
+    
     Args:
-        feed_tables (Dict[str, pd.DataFrame]): Dictionary of feed tables including
-            shapes, stops and stop_times
-        roadway_net (RoadwayNetwork): This object will be updated, with new nodes and
-            links added for the transit network.
-        local_crs: Coordinate reference system to use for projection, in feet. (e.g., "EPSG:2227")
-        crs_units: 'feet' or 'meters', corresonding to local_crs
-        trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
+        feed_tables: Dictionary with required tables:
+            - 'stops': Stop information with geometry
+            - 'stop_times': Stop sequences for trips
+            - 'shapes': Shape points between stops
+            - 'routes': Route types
+        roadway_net: RoadwayNetwork to modify with new nodes/links
+        local_crs: Coordinate reference system for projections
+        crs_units: Distance units ('feet' or 'meters')
+        trace_shape_ids: Optional shape IDs for debug logging
 
     Returns:
-        Tuple containing:
-            - stop_id_to_model_node_id_dict (Dict[str,int]): mapping stop_id to model_node_ids for new
-                roadway nodes created from stations.
-            - bus_stop_links_gdf (gpd.GeoDataFrame): GeoDataFrame containing stop links for non-station
-                route types (e.g., buses) that were not added to the roadway network.
+        Tuple[Dict[str,int], gpd.GeoDataFrame]:
+            - Dictionary mapping new station stop_ids to model_node_ids
+            - GeoDataFrame of bus stop links (not added to network) with columns:
+                shape_id, stop_sequence, stop_id, stop_name, next_stop_id,
+                next_stop_name, A, B, geometry
+                
+    Notes:
+        - Stations are new nodes; bus stops use existing road nodes
+        - Self-loops (stop appearing twice consecutively) are filtered out
+        - Links follow actual shape geometry when available
+        - Parent stations without trips are handled correctly
     """
     WranglerLogger.info(f"Adding transit stations and station-based links to the roadway network")
     WranglerLogger.debug(f"feed_tables['shapes'] type={type(feed_tables['shapes'])}:\n{feed_tables['shapes']}")
@@ -1578,44 +1746,73 @@ def create_feed_from_gtfs_model(
     skip_stop_agencies: Optional[List[str]] = None,
     trace_shape_ids: Optional[List[str]] = None
 ) -> Feed:
-    """Converts a GTFS feed to a Wrangler Feed object compatible with the given RoadwayNetwork.
+    """Convert GTFS model to Wrangler Feed with stops mapped to roadway network.
     
-    This function modifies the roadway_net.nodes_df in place by:
-    - Converting it to a GeoDataFrame if it isn't already
-    - Adding transit accessibility attributes based on connected links:
-        - rail_only: True if node is connected to any rail_only link
-        - bus_only: True if node is connected to any bus_only link  
-        - ferry_only: True if node is connected to any ferry_only link
-        - drive_access: True if node is connected to any drive_access link
-
+    Comprehensive conversion that transforms GTFS schedule data into a frequency-based
+    Feed representation compatible with travel modeling. Maps transit stops to roadway
+    nodes and optionally adds station infrastructure to the network.
+    
+    Process Steps:
+    1. Converts roadway nodes to GeoDataFrame if needed
+    2. Copies and prepares GTFS tables (routes, trips, stops, etc.)
+    3. Enriches stops with route/agency metadata (add_additional_data_to_stops)
+    4. Creates frequency-based schedules from detailed timetables
+    5. Enriches shapes with stop matching (add_additional_data_to_shapes)
+    6. Matches bus stops to existing roadway nodes
+    7. Adds station nodes and links for fixed-guideway transit
+    8. Routes bus services through road network between stops
+    9. Creates final Feed object with all processed tables
+    
+    Modifies in place:
+    
+    roadway_net.nodes_df - Converted to GeoDataFrame and adds:
+        - geometry: Point geometry if not present
+        - bus_access (bool): True if node is in bus modal graph
+        - Additional modal access flags may be added
+        
+    roadway_net - If add_stations_and_links=True:
+        - Adds new nodes for transit stations
+        - Adds dedicated transit links between stations
+        - Updates shapes and modal graphs
+    
+    Creates feed_tables dictionary with:
+        - routes, trips, agencies: Copied from GTFS
+        - stops: Enhanced with model_node_id mappings
+        - stop_times: Converted to frequency-based
+        - shapes: Updated with roadway routing
+        - frequencies: Created from timetables
+    
     Args:
-        gtfs_model (GtfsModel): Standard GTFS model to convert
-        roadway_net (RoadwayNetwork): RoadwayNetwork to map stops to. The nodes_df will be
-            modified in place to add transit accessibility attributes.
-        local_crs: Local coordinate reference system for projection, for calculating distances in feet or meters
-        crs_units: distance measurement for local_crs, "feet" or "meters"
-        timeperiods (Dict[str, Tuple[str, str]],): Dictionary of time period label to timespan for frequencies.
-            Example: { 'EA': ['03:00','06:00], ...]
-        frequency_method (str): one of 'uniform_headway', 'mean_headway' or 'median_headway'. 
-            See create_feed_frequencies() for more details.
-        default_frequency_for_onetime_route (int, optional): Default headway in seconds
-            for routes with only one trip in a period. Defaults to 10800 (3 hours).
-        add_stations_and_links: (bool) If True, adds these stops and links to the raoday_net for
-            route_types in STATION_ROUTE_TYPES. Recommend doing this because matching is a hassle!
-            False is not currently implemented.
-        skip_stop_agencies (Optional[List[str]]): List of agency IDs that use skip-stop patterns.
-            Only these agencies will have skip-stop detection applied when creating shapes 
-            for station-only route types.
-        trace_shape_ids (Optional[List[str]]): List of shape_ids to log extra debug output.
+        gtfs_model: Source GTFS data model
+        roadway_net: Target roadway network for stop mapping
+        local_crs: Coordinate system for distance calculations
+        crs_units: Distance units ('feet' or 'meters')
+        timeperiods: Time period definitions for frequencies
+            Example: {'EA': ('03:00','06:00'), 'AM': ('06:00','10:00')}
+        frequency_method: How to calculate headways
+            ('uniform_headway', 'mean_headway', or 'median_headway')
+        default_frequency_for_onetime_route: Default headway in seconds
+            for routes with one trip per period (default: 10800)
+        add_stations_and_links: If True, add stations to roadway network
+            (recommended, False not implemented)
+        skip_stop_agencies: Agency IDs using skip-stop patterns
+        trace_shape_ids: Shape IDs for detailed debug logging
 
     Returns:
-        Feed: Wrangler Feed object with stops mapped to roadway network nodes
+        Feed: Wrangler Feed object with:
+            - Stops mapped to roadway nodes
+            - Frequency-based trip representation
+            - Routes following road network paths
     
     Raises:
-        NodeNotFoundError: If any GTFS stops cannot be matched to roadway network nodes.
-            This occurs when stops are too far from available nodes (beyond MAX_DISTANCE_STOP).
-            The exception will have an 'unmatched_stops_gdf' attribute containing a GeoDataFrame
-            of the unmatched stops with their details for debugging purposes.
+        TransitValidationError: If bus stops can't be matched to roadway
+        NodeNotFoundError: If required nodes aren't found
+        Exception: Debug exception with intermediate data (temporary)
+        
+    Notes:
+        - Currently raises a debug exception before completion (line 1698-1702)
+        - Bus routes are re-routed through actual road network
+        - Station routes keep original alignment with new nodes/links
     """
     WranglerLogger.debug(f"create_feed_from_gtfsmodel()")
     if crs_units not in ["feet","meters"]:
