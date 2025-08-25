@@ -480,7 +480,7 @@ def match_bus_stops_to_roadway_nodes(
         - stop_lon, stop_lat, geometry: Updated to road node location if valid_match
     
     feed_tables['shapes'] - Adds/modifies columns:
-        - model_node_id (int): Matched roadway node ID for bus stops
+        - shape_model_node_id (int): Matched roadway node ID for bus stops
         - match_distance_{crs_units} (float): Distance to matched node
         - shape_pt_lon, shape_pt_lat, geometry: Updated to road node location if valid match
     
@@ -535,7 +535,11 @@ def match_bus_stops_to_roadway_nodes(
     WranglerLogger.debug(f"bus_stops_gdf:\n{bus_stops_gdf}")
     WranglerLogger.debug(f"feed_tables['shapes']:\n{feed_tables['shapes']}")
     if trace_shape_ids:
-        WranglerLogger.debug(f"trace shapes:\n{feed_tables['shapes'].loc[ feed_tables['shapes']['shape_id'].isin(trace_shape_ids)]}")
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace shapes for {trace_shape_id}:\n"
+                f"{feed_tables['shapes'].loc[ feed_tables['shapes']['shape_id']==trace_shape_id]}"
+            )
 
     # Build BallTree for bus-access nodes that are in the bus graph
     # This ensures we only match to connected nodes
@@ -658,7 +662,7 @@ def match_bus_stops_to_roadway_nodes(
         how='left',
         suffixes=('', '_bus'),
         validate='many_to_one'
-    )
+    ).rename(columns={'model_node_id':'shape_model_node_id'})
     # Only update stop location for valid match
     feed_tables['shapes'].loc[ feed_tables['shapes']['valid_match'] == True, 'shape_pt_lon'] = feed_tables['shapes']['stop_lon']
     feed_tables['shapes'].loc[ feed_tables['shapes']['valid_match'] == True, 'shape_pt_lat'] = feed_tables['shapes']['stop_lat']
@@ -667,7 +671,11 @@ def match_bus_stops_to_roadway_nodes(
         feed_tables['shapes'][f'match_distance_{crs_units}_bus']
 
     if trace_shape_ids:
-        WranglerLogger.debug(f"trace shapes:\n{feed_tables['shapes'].loc[ feed_tables['shapes']['shape_id'].isin(trace_shape_ids)]}")
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace feed_tables['shapes'] for {trace_shape_id} at the end of match_bus_stops_to_roadway_nodes:\n"
+                f"{feed_tables['shapes'].loc[ feed_tables['shapes']['shape_id']==trace_shape_id]}"
+            )
 
     # Drop bus-specific columns
     feed_tables['shapes'].drop(columns=['stop_lon','stop_lat','geometry_bus',f'match_distance_{crs_units}_bus','valid_match'], inplace=True)
@@ -882,7 +890,7 @@ def create_bus_routes(
             # Try to find shortest path
             path = nx.shortest_path(G_bus, row['A'], row['B'])
             path_length = len(path) - 1  # Number of edges
-            WranglerLogger.debug(f"Found path for {row['A']} to {row['B']}: len={path_length} {path}")
+            # WranglerLogger.debug(f"Found path for {row['A']} to {row['B']}: len={path_length} {path}")
 
             # Create shape point rows for that path
             for path_node_id in path:
@@ -978,7 +986,7 @@ def create_bus_routes(
             how='left',
             on='model_node_id',
             validate='many_to_one'
-        ).rename({'X':'shape_pt_lon', 'Y':'shape_pt_lat'}),
+        ).rename(columns={'X':'shape_pt_lon', 'Y':'shape_pt_lat'}),
         crs=roadway_net.nodes_df.crs
     )
     WranglerLogger.debug(f"Final bus_node_sequence_gdf:\n{bus_node_sequence_gdf}")
@@ -1284,9 +1292,6 @@ def add_additional_data_to_shapes(
     matched_count = 0
 
     # Log shape information for trace_shape_ids for debugging
-    # If max_rows is exceeded, switch to truncate view
-    pd_max_rows = pd.options.display.max_rows
-    pd.options.display.max_rows = 600
 
     # Make sure this is sorted by trip and then stop sequence
     feed_tables['stop_times'].sort_values(by=['trip_id','stop_sequence'], inplace=True)
@@ -1359,10 +1364,8 @@ def add_additional_data_to_shapes(
                           f'match_distance_{crs_units}', 'shape_pt_lon', 'shape_pt_lat']
             WranglerLogger.debug(f"\n{shape_df[debug_cols]}")
     
-    
     WranglerLogger.info("Finished adding stop information to shapes")
-    # revert to previous pd_max_rows
-    pd.options.display.max_rows = pd_max_rows 
+
 
 def add_stations_and_links_to_roadway_network(
     feed_tables: Dict[str, pd.DataFrame],
@@ -1384,7 +1387,8 @@ def add_stations_and_links_to_roadway_network(
     4. Creates new roadway nodes for stations not already in network
     5. Creates dedicated transit links with appropriate access restrictions
     6. Updates feed_tables['stops'] with model_node_id for all stops
-    7. Returns bus stop links separately (not added to network)
+    7. Updates feed_tables['shapes'] with shape_model_node_id for all stations
+    8. Returns bus stop links separately (not added to network)
     
     Modifies in place:
     
@@ -1400,6 +1404,9 @@ def add_stations_and_links_to_roadway_network(
         - model_node_id (int): Roadway node ID for the stop
         - Updates existing bus stop model_node_ids
         - Adds new station model_node_ids
+    
+    feed_tables['shapes'] - Adds/updates:
+        - shape_model_node_id (int): Roadway node ID for the shape point
     
     Args:
         feed_tables: Dictionary with required tables:
@@ -1461,10 +1468,12 @@ def add_stations_and_links_to_roadway_network(
     
     stop_links_df = stop_links_df[has_next & ~is_self_loop]
     if trace_shape_ids:
-        WranglerLogger.debug(
-            f"trace stop_links_df:\n"
-            f"{stop_links_df.loc[stop_links_df.shape_id.isin(trace_shape_ids)]}"
-        )
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace stop_links_df for {trace_shape_id}:\n"
+                f"{stop_links_df.loc[stop_links_df.shape_id==trace_shape_id]}"
+            )
+
     WranglerLogger.debug(f"stop_links_df.dtypes:\n{stop_links_df.dtypes}")
     # route_type            category
     # route_id                object
@@ -1494,11 +1503,13 @@ def add_stations_and_links_to_roadway_network(
     # drop the first one - that's already covered by the stop point
     shape_links_df.loc[ shape_links_df['stop_id'].notna(), 'shape_stop_sequence'] = np.nan
     shape_links_df.loc[ shape_links_df['stop_id'].notna(), 'shape_stop_id'] = np.nan
+
     if trace_shape_ids:
-        WranglerLogger.debug(
-            f"trace shape_links_df after ffill():\n"
-            f"{shape_links_df.loc[shape_links_df.shape_id.isin(trace_shape_ids)]}"
-        )
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace shape_links_df for {trace_shape_id} after ffill():\n"
+                f"{shape_links_df.loc[shape_links_df.shape_id==trace_shape_id]}"
+            )
     # Example: this shape's first stop is stop_sequence=2, the shape points at the beginning are pre-trip points
     #                 shape_id                         geometry stop_sequence stop_id  shape_stop_sequence shape_stop_id
     # 909222  SF:9717:20230930  POINT (6013196.693 2109556.951)            -1      -1                  NaN           NaN
@@ -1528,10 +1539,11 @@ def add_stations_and_links_to_roadway_network(
         num_points = pd.NamedAgg(column='geometry', aggfunc='nunique')
     ).reset_index(drop=False)
     if trace_shape_ids:
-        WranglerLogger.debug(
-            f"trace shape_links_agg_df:\n"
-            f"{shape_links_agg_df.loc[shape_links_agg_df.shape_id.isin(trace_shape_ids)]}"
-        )
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace shape_links_agg_df for {trace_shape_id}:\n"
+                f"{shape_links_agg_df.loc[shape_links_agg_df.shape_id==trace_shape_id]}"
+            )
     # columns are shape_id, stop_sequence, point_list, num_points
     #                shape_id  shape_stop_sequence                                         point_list  num_points
     # 36235  SF:9717:20230930                -1.00  [POINT (6013227.6381617775 2109614.5949144145)...           5
@@ -1563,7 +1575,7 @@ def add_stations_and_links_to_roadway_network(
             # no intermediate points
             else shapely.geometry.LineString([row['stop_geometry'], row['next_stop_geometry']]),
             axis=1)
-    WranglerLogger.debug(f"stop_links_df:\n{stop_links_df}")
+    WranglerLogger.debug(f"stop_links_df including multi-point lines:\n{stop_links_df}")
 
     # create GeoDataFrame; this is in the local crs
     stop_links_df.drop(columns=['stop_geometry','next_stop_geometry','point_list','_merge'], inplace=True)
@@ -1603,7 +1615,7 @@ def add_stations_and_links_to_roadway_network(
     new_station_stop_ids_gdf = station_stop_ids_gdf.loc[ station_stop_ids_gdf['model_node_id'].isna() ].reset_index(drop=False)
     new_station_stop_ids_gdf.drop(columns={'model_node_id'}, inplace=True)
 
-    # Assign model_node_id and add to roadway network
+    # Assign model_node_id and add new stations to roadway network as roadway nodes
     max_node_num = roadway_net.nodes_df.model_node_id.max()
     new_station_stop_ids_gdf['model_node_id'] = new_station_stop_ids_gdf.index + max_node_num + 1
     WranglerLogger.info(f"Adding {len(new_station_stop_ids_gdf):,} nodes to roadway network")
@@ -1675,7 +1687,7 @@ def add_stations_and_links_to_roadway_network(
     WranglerLogger.info(f"Adding {len(station_road_links_gdf):,} shapes to roadway network")
     roadway_net.add_shapes(station_road_links_gdf)
 
-    # set model_node_id for stations in feed_table['stops']
+    # Update feed_table['stops']: set model_node_id for stations in feed_table['stops']
     WranglerLogger.debug(
         f"Before updating, feed_tables['stops'] with model_node_id set: "
         f"{feed_tables['stops']['model_node_id'].notna().sum():,}"
@@ -1689,7 +1701,7 @@ def add_stations_and_links_to_roadway_network(
 
     feed_tables['stops']['station_node_id'] = feed_tables['stops']['stop_id'].map(stop_id_to_model_node_id_dict)
 
-    # verify no stops have a model_node_id already set (from match_bus_stops_to_roadway_nodes() *and* have a station_model_node_id
+    # Verify no stops table stops have a model_node_id already set (from match_bus_stops_to_roadway_nodes() *and* have a station_model_node_id
     have_both_df = feed_tables['stops'].loc[ 
         feed_tables['stops']['model_node_id'].notna() & 
         feed_tables['stops']['station_node_id'].notna()
@@ -1701,6 +1713,7 @@ def add_stations_and_links_to_roadway_network(
         f"After updating, feed_tables['stops'] with model_node_id set:\n"
         f"{feed_tables['stops']['model_node_id'].notna().sum():,}"
     )
+    # Log feed_tables['stops'] for trace_shape_ids
     if trace_shape_ids:
         for trace_shape_id in trace_shape_ids:
             WranglerLogger.debug(
@@ -1712,6 +1725,35 @@ def add_stations_and_links_to_roadway_network(
     WranglerLogger.debug(f"feed_tables['stops']:\n{feed_tables['stops']}")
     # TODO: I think these are all parent nodes...
     WranglerLogger.debug(f"feed_tables['stops'] without model_node_id:\n{feed_tables['stops'].loc[ feed_tables['stops']['model_node_id'].isna() ]}")
+
+    # Update feed_table['shapes']: set shape_model_node_id for stations in feed_table['shapes'] and delete the other nodes.
+    # Those are now in the shape of the roadway network link
+    WranglerLogger.debug(f"About to update feed['shapes'] in add_stations_and_links_to_roadway_network:\n{feed_tables['shapes']}")
+    feed_tables['shapes']['station_node_id'] = feed_tables['shapes']['stop_id'].map(stop_id_to_model_node_id_dict)
+
+    # Verify no shapes table stops have a shape_model_node_id already set *and* have a station_model_node_id
+    have_both_df = feed_tables['shapes'].loc[ 
+        feed_tables['shapes']['shape_model_node_id'].notna() & 
+        feed_tables['shapes']['station_node_id'].notna()
+    ]
+    assert(len(have_both_df) == 0)
+    feed_tables['shapes'].loc[ feed_tables['shapes']['station_node_id'].notna(), 'shape_model_node_id'] = feed_tables['shapes']['station_node_id']
+    feed_tables['shapes'].drop(columns=['station_node_id'], inplace=True)
+    # Delete other nodes
+    feed_tables['shapes'] = feed_tables['shapes'].loc[ 
+        # leave non station route types (bus) alone -- these will be handled elsewhere
+        ~feed_tables['shapes']['route_type'].isin(STATION_ROUTE_TYPES) |
+        # for station route types, only keep those with model_node_id set
+        feed_tables['shapes']['shape_model_node_id'].notna()
+    ]
+
+    # Log feed_tables['shapes'] for trace_shape_ids
+    if trace_shape_ids:
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace feed_tables['shapes'] for {trace_shape_id} at the end of add_stations_and_links_to_roadway_network():\n"
+                f"{feed_tables['shapes'].loc[ feed_tables['shapes']['shape_id']==trace_shape_id]}"
+            )
 
     # set A for stop_id's model_node_id
     stop_links_gdf = pd.merge(
@@ -1890,13 +1932,9 @@ def create_feed_from_gtfs_model(
         create_bus_routes(bus_stop_links_gdf, feed_tables, roadway_net, local_crs, crs_units, trace_shape_ids)
     except Exception as e:
         raise e
-
-    # temporary
-    e = Exception("This is not a real exception but just for testing")
-    e.station_id_to_model_node_id_dict = station_id_to_model_node_id_dict
-    e.bus_stop_links_gdf = bus_stop_links_gdf
-    e.bus_stops_gdf = feed_tables['stops'].loc[ feed_tables['stops']['is_bus_stop'] == True]
-    raise e
+    
+    for table_name in feed_tables.keys():
+        WranglerLogger.debug(f"feed_tables[{table_name}]:\n{feed_tables[table_name]}")
 
     # create Feed object from results of the above
     try:
@@ -1905,7 +1943,7 @@ def create_feed_from_gtfs_model(
         return feed
     except Exception as e:
         WranglerLogger.error(f"Error creating Feed: {e}")
-        raise e        
+        raise e
 
 
 
