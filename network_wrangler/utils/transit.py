@@ -1033,11 +1033,7 @@ def add_additional_data_to_stops(
     - shape_ids (list of str): All shapes associated with this stop
     
     Stop Type Flags:
-    - stop_in_mixed_traffic (bool): True if stop serves any MIXED_TRAFFIC_ONLY_ROUTE_TYPES
-        (currently only BUS and TROLLEYBUS)
     - is_parent (bool): True if other stops reference this as parent_station
-    - child_stop_in_mixed_traffic (bool): True if any child stop has stop_in_mixed_traffic=True
-        (only set for parent stations)
     
     Args:
         feed_tables: Dictionary with required tables:
@@ -1093,13 +1089,10 @@ def add_additional_data_to_stops(
     }).reset_index()
     
     stop_agency_info.columns = ["stop_id", "agency_ids", "agency_names", "route_ids", "route_names", "route_types", "shape_ids"]
-    stop_agency_info["stop_in_mixed_traffic"] = stop_agency_info["route_types"].apply(
-        lambda x: any(rt in MIXED_TRAFFIC_ONLY_ROUTE_TYPES for rt in x) if x else False
-    )  # A stop is in mixed traffic if it serves MIXED_TRAFFIC_ONLY_ROUTE_TYPES
 
     # columns: stop_id (str), agency_ids (list of str), agency_names (list of str), 
     #   route_ids (list of str), route_names (list of str), route_types (list of int), 
-    #   shape_ids (list of str), stop_in_mixed_traffic (bool)
+    #   shape_ids (list of str)
     WranglerLogger.debug(f"stop_agency_info.head():\n{stop_agency_info.head()}")
 
     # Merge this information back to stops
@@ -1108,41 +1101,27 @@ def add_additional_data_to_stops(
     )
 
     # Handle parent stations that may not be included in trips
-    # For these, set child_stop_in_mixed_traffic if any of the child stops has stop_in_mixed_traffic == True
     if "parent_station" in feed_tables["stops"].columns:
-        # Create a subset of child stops with their parent_station and stop_in_mixed_traffic status
-        child_stops = feed_tables["stops"][feed_tables["stops"]["parent_station"].notna() & (feed_tables["stops"]["parent_station"] != "")][
-            ["parent_station", "stop_in_mixed_traffic"]
-        ]
+        # Find which stops are referenced as parent stations
+        child_stops = feed_tables["stops"][feed_tables["stops"]["parent_station"].notna() & (feed_tables["stops"]["parent_station"] != "")]
         
         if len(child_stops) > 0:
-            # Group by parent_station and check if any child is in mixed traffic
-            parent_mixed_traffic = child_stops.groupby("parent_station")["stop_in_mixed_traffic"].any().reset_index()
-            parent_mixed_traffic.columns = ["stop_id", "child_stop_in_mixed_traffic"]
-            parent_mixed_traffic["is_parent"] = True
-            WranglerLogger.debug(f"parent_mixed_traffic:\n{parent_mixed_traffic}")
+            # Get unique parent station IDs
+            parent_station_ids = child_stops["parent_station"].unique()
             
-            # Merge back to the main dataframe
-            feed_tables["stops"] = feed_tables["stops"].merge(
-                parent_mixed_traffic,
-                on="stop_id",
-                how="left"
-            )
+            # Mark parent stations
+            feed_tables["stops"]["is_parent"] = False
+            feed_tables["stops"].loc[feed_tables["stops"]["stop_id"].isin(parent_station_ids), "is_parent"] = True
             
-            # Fill NaN values with False (stops that are not parent stations)
-            # Suppress downcasting warning for fillna
-            with pd.option_context('future.no_silent_downcasting', True):
-                feed_tables["stops"]["is_parent"] = feed_tables["stops"]["is_parent"].fillna(value=False).astype(bool)
-                feed_tables["stops"]["child_stop_in_mixed_traffic"] = feed_tables["stops"]["child_stop_in_mixed_traffic"].fillna(value=False).astype(bool)
-            
-            # Log parent stations with child stops in mixed traffic
+            # Log parent stations
             WranglerLogger.debug(
-                f"Parent stations with mixed traffic children:\n" + \
-                f"{feed_tables['stops'].loc[feed_tables['stops']['child_stop_in_mixed_traffic'] == True, ['stop_id', 'stop_name', 'child_stop_in_mixed_traffic']]}"
+                f"Found {len(parent_station_ids)} parent stations:\n" + \
+                f"{feed_tables['stops'].loc[feed_tables['stops']['is_parent'] == True, ['stop_id', 'stop_name']]}"
             )
+        else:
+            feed_tables["stops"]["is_parent"] = False
     else:
         feed_tables["stops"]["is_parent"] = False
-        feed_tables["stops"]["child_stop_in_mixed_traffic"] = False
     
     WranglerLogger.debug(f"add_additional_data_to_stops() completed. feed_tables['stops']:\n{feed_tables['stops']}")
 
@@ -1963,14 +1942,16 @@ def create_feed_from_gtfs_model(
     # route_names                      object
     # route_types                      object
     # shape_ids                        object
-    # stop_in_mixed_traffic            object
-    # child_stop_in_mixed_traffic        bool
     # is_parent                          bool
     # is_bus_stop                        bool
     # stop_id                          object
     # match_distance_feet             float64
     # valid_match                      object
-    
+
+    # create full stop_id_to_model_node_id_dict mapping
+    stop_id_to_model_node_id_dict = feed_tables['stops'][['orig_stop_id','stop_id']].set_index('orig_stop_id').to_dict()['stop_id']
+    WranglerLogger.debug(f"stop_id_to_model_node_id_dict: {stop_id_to_model_node_id_dict}")
+
     # Convert NaN to empty lists before aggregation
     feed_tables['stops']['agency_ids']   = feed_tables['stops']['agency_ids'].apply(lambda x: x if isinstance(x, list) else [])
     feed_tables['stops']['agency_names'] = feed_tables['stops']['agency_names'].apply(lambda x: x if isinstance(x, list) else [])
@@ -1980,27 +1961,29 @@ def create_feed_from_gtfs_model(
     feed_tables['stops']['shape_ids']    = feed_tables['stops']['shape_ids'].apply(lambda x: x if isinstance(x, list) else [])
 
     feed_tables['stops'] = feed_tables['stops'].groupby(by=['stop_id']).aggregate(
-        orig_stop_id               = pd.NamedAgg(column='orig_stop_id',   aggfunc=list),
-        stop_name                  = pd.NamedAgg(column='stop_name',      aggfunc=list),
-        stop_lat                   = pd.NamedAgg(column='stop_lat',       aggfunc='first'),
-        stop_lon                   = pd.NamedAgg(column='stop_lon',       aggfunc='first'),
-        zone_id                    = pd.NamedAgg(column='zone_id',        aggfunc=list),
-        location_type              = pd.NamedAgg(column='location_type',  aggfunc='first'),
-        parent_station             = pd.NamedAgg(column='parent_station', aggfunc='first'),
-        level_id                   = pd.NamedAgg(column='level_id',       aggfunc=list),
-        geometry                   = pd.NamedAgg(column='geometry',       aggfunc='first'),
-        agency_ids                 = pd.NamedAgg(column='agency_ids',     aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
-        agency_names               = pd.NamedAgg(column='agency_names',   aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
-        route_ids                  = pd.NamedAgg(column='route_ids',      aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
-        route_names                = pd.NamedAgg(column='route_names',    aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
-        route_types                = pd.NamedAgg(column='route_types',    aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
-        shape_ids                  = pd.NamedAgg(column='shape_ids',      aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
-        stop_in_mixed_traffic      = pd.NamedAgg(column='stop_in_mixed_traffic',  aggfunc=any),
-        child_stop_in_mixed_traffic= pd.NamedAgg(column='child_stop_in_mixed_traffic', aggfunc=any),
-        is_parent                  = pd.NamedAgg(column='is_parent',      aggfunc=any),
-        is_bus_stop                = pd.NamedAgg(column='is_bus_stop',    aggfunc=any),
+        orig_stop_id    = pd.NamedAgg(column='orig_stop_id',   aggfunc=list),
+        stop_name       = pd.NamedAgg(column='stop_name',      aggfunc=list),
+        stop_lat        = pd.NamedAgg(column='stop_lat',       aggfunc='first'),
+        stop_lon        = pd.NamedAgg(column='stop_lon',       aggfunc='first'),
+        zone_id         = pd.NamedAgg(column='zone_id',        aggfunc=list),
+        location_type   = pd.NamedAgg(column='location_type',  aggfunc='first'),
+        parent_station  = pd.NamedAgg(column='parent_station', aggfunc='first'),
+        level_id        = pd.NamedAgg(column='level_id',       aggfunc=list),
+        geometry        = pd.NamedAgg(column='geometry',       aggfunc='first'),
+        agency_ids      = pd.NamedAgg(column='agency_ids',     aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        agency_names    = pd.NamedAgg(column='agency_names',   aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        route_ids       = pd.NamedAgg(column='route_ids',      aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        route_names     = pd.NamedAgg(column='route_names',    aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        route_types     = pd.NamedAgg(column='route_types',    aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        shape_ids       = pd.NamedAgg(column='shape_ids',      aggfunc=lambda x: list(set([item for sublist in x for item in sublist]))),
+        is_parent       = pd.NamedAgg(column='is_parent',      aggfunc=any),
+        is_bus_stop     = pd.NamedAgg(column='is_bus_stop',    aggfunc=any),
     ).reset_index(drop=False)
     feed_tables['stops']['stop_id'] = feed_tables['stops']['stop_id'].astype(int)
+
+    # Update feed_tables['stop_times']
+    feed_tables['stop_times'].rename(columns={'stop_id':'orig_stop_id'}, inplace=True)
+    feed_tables['stop_times']['stop_id'] = feed_tables['stop_times']['orig_stop_id'].map(stop_id_to_model_node_id_dict)
 
     # Log all tables
     for table_name in feed_tables.keys():
