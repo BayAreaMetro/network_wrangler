@@ -516,7 +516,7 @@ def build_transit_graph(transit_links_df: pd.DataFrame) -> Dict[int, set]:
     return graph
 
 
-def match_bus_stops_to_roadway_nodes(  # noqa: PLR0915
+def match_bus_stops_to_roadway_nodes(  # noqa: PLR0912, PLR0915
     feed_tables: Dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
     local_crs: str,
