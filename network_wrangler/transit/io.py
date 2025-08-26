@@ -1,5 +1,6 @@
 """Functions for reading and writing transit feeds and networks."""
 
+import os
 from pathlib import Path
 from typing import Literal, Optional, Union
 
@@ -251,10 +252,8 @@ def load_feed_from_path(  # noqa: PLR0915
             )
 
             # Optionally save to CSV for investigation
-            import os
-
-            if os.path.exists(str(feed_path)):
-                invalid_csv_path = feed_path.parent / "invalid_stop_times_after_filtering.csv"
+            if Path(feed_path).exists():
+                invalid_csv_path = Path(feed_path).parent / "invalid_stop_times_after_filtering.csv"
                 invalid_with_routes.to_csv(invalid_csv_path, index=False)
                 WranglerLogger.info(f"Saved invalid stop_times to {invalid_csv_path}")
 
@@ -400,10 +399,11 @@ def write_transit(
         data_source = transit_obj
         source_type = type(transit_obj).__name__
     else:
-        raise TypeError(
+        msg = (
             f"transit_obj must be a TransitNetwork, Feed, or GtfsModel instance, "
             f"not {type(transit_obj).__name__}"
         )
+        raise TypeError(msg)
 
     # Write tables
     tables_written = 0

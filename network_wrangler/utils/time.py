@@ -18,6 +18,10 @@ from datetime import date, datetime, timedelta
 from typing import Optional, Union
 
 import pandas as pd
+
+# Constants
+MIN_TIMESPAN_PARTS = 2
+MAX_HOURS_IN_DAY = 24
 from pydantic import validate_call
 
 from ..logger import WranglerLogger
@@ -437,11 +441,11 @@ def time_to_seconds(time_obj: Union[str, datetime, pd.Timestamp]) -> int:
         parts = time_obj.split(":")
         hours = int(parts[0])
         minutes = int(parts[1])
-        seconds = int(parts[2]) if len(parts) > 2 else 0
+        seconds = int(parts[2]) if len(parts) > MIN_TIMESPAN_PARTS else 0
 
         # Handle times > 24 hours (common in GTFS for service past midnight)
-        if hours >= 24:
-            hours = hours % 24
+        if hours >= MAX_HOURS_IN_DAY:
+            hours = hours % MAX_HOURS_IN_DAY
 
         return hours * 3600 + minutes * 60 + seconds
     # Handle pandas Timestamp or datetime objects

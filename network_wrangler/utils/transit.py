@@ -6,6 +6,7 @@ from typing import Any, Literal, Optional, Union
 
 # Constants
 MAX_TRUNCATION_WARNING_STOPS = 10
+MIN_ROUTE_SEGMENTS = 2
 
 import geopandas as gpd
 import networkx as nx
@@ -104,7 +105,7 @@ MAX_DISTANCE_STOP = {
 """Maximum distance for a stop to match to a node."""
 
 
-def create_feed_frequencies(
+def create_feed_frequencies(  # noqa: PLR0915
     feed_tables: Dict[str, pd.DataFrame],
     timeperiods: Dict[str, Tuple[str, str]],
     frequency_method: str,
@@ -163,9 +164,8 @@ def create_feed_frequencies(
 
     VALID_FREQUENCY_METHOD = ["uniform_headway", "mean_headway", "median_headway"]
     if frequency_method not in VALID_FREQUENCY_METHOD:
-        raise ValueError(
-            f"frequency_method must be on of {VALID_FREQUENCY_METHOD}; received {frequency_method}"
-        )
+        msg = f"frequency_method must be on of {VALID_FREQUENCY_METHOD}; received {frequency_method}"
+        raise ValueError(msg)
 
     # convert timeperiods to { timeperiod_label: [start_time, end_time]} where times are in minutes from midnight
     timeperiod_minutes_after_midnight = {}
@@ -324,7 +324,7 @@ def create_feed_frequencies(
             num_trip_ids=pd.NamedAgg(column="trip_id", aggfunc="nunique"),
             trip_ids=pd.NamedAgg(column="trip_id", aggfunc=list),
             trip_depart_time=pd.NamedAgg(
-                column="trip_depart_time", aggfunc=lambda x: sorted(list(x))
+                column="trip_depart_time", aggfunc=lambda x: sorted(x)
             ),
             stop_pattern=pd.NamedAgg(column="stop_pattern", aggfunc="first"),
         )
@@ -451,7 +451,7 @@ def create_feed_frequencies(
         f"After aggregating to new shape_id version of trip_id, "
         f"feed_tables['trips'].describe():\n{feed_tables['trips'].describe()}"
     )
-    feed_tables["trips"] = feed_tables["trips"][["trip_id"] + TRIP_TABLE_COLUMNS]
+    feed_tables["trips"] = feed_tables["trips"][["trip_id", *TRIP_TABLE_COLUMNS]]
     WranglerLogger.debug(f"feed_tables['trips']:\n{feed_tables['trips']}")
 
     # Update feed_tables['stop_times'] to be a WranglerStopTimesTable
@@ -516,7 +516,7 @@ def build_transit_graph(transit_links_df: pd.DataFrame) -> Dict[int, set]:
     return graph
 
 
-def match_bus_stops_to_roadway_nodes(
+def match_bus_stops_to_roadway_nodes(  # noqa: PLR0915
     feed_tables: Dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
     local_crs: str,
@@ -575,7 +575,8 @@ def match_bus_stops_to_roadway_nodes(
         - Preserves original locations for non-bus stops
     """
     if crs_units not in ["feet", "meters"]:
-        raise ValueError(f"crs_units must be on of 'feet' or 'meters'; received {crs_units}")
+        msg = f"crs_units must be on of 'feet' or 'meters'; received {crs_units}"
+        raise ValueError(msg)
 
     # Make roadway network nodes a GeoDataFrame if it's not already
     if not isinstance(roadway_net.nodes_df, gpd.GeoDataFrame):
@@ -644,9 +645,13 @@ def match_bus_stops_to_roadway_nodes(
     bus_stops_gdf["model_node_id"] = None
     bus_stops_gdf[f"match_distance_{crs_units}"] = np.inf  # in crs_units
 
-    from sklearn.neighbors import BallTree
-
     # Build spatial index for bus nodes
+    try:
+        from sklearn.neighbors import BallTree  # noqa: PLC0415
+    except ImportError as e:
+        msg = "sklearn is required for transit stop matching. Install with: pip install scikit-learn"
+        raise ImportError(msg) from e
+    
     bus_node_coords = np.array([(geom.x, geom.y) for geom in bus_accessible_nodes_gdf.geometry])
     bus_nodes_tree = BallTree(bus_node_coords)
     WranglerLogger.debug(f"Created BallTree for {len(bus_node_coords):,} bus nodes")
@@ -701,7 +706,7 @@ def match_bus_stops_to_roadway_nodes(
         for trace_shape_id in trace_shape_ids:
             WranglerLogger.debug(
                 f"trace bus_stops_gdf for {trace_shape_id}:\n"
-                f"{bus_stops_gdf.loc[bus_stops_gdf['shape_ids'].apply(lambda x: trace_shape_id in x)]}"
+                f"{bus_stops_gdf.loc[bus_stops_gdf['shape_ids'].apply(lambda x, tid=trace_shape_id: tid in x)]}"
             )
 
     # verify model_node_id, f'match_distance_{crs_units}' and 'valid_match' are not in feed_tables['stops']
@@ -749,7 +754,7 @@ def match_bus_stops_to_roadway_nodes(
         for trace_shape_id in trace_shape_ids:
             WranglerLogger.debug(
                 f"trace feed_tables['stops'] for {trace_shape_id}:\n"
-                f"{feed_tables['stops'].loc[feed_tables['stops']['shape_ids'].apply(lambda x: isinstance(x, list) and trace_shape_id in x)]}"
+                f"{feed_tables['stops'].loc[feed_tables['stops']['shape_ids'].apply(lambda x, tid=trace_shape_id: isinstance(x, list) and tid in x)]}"
             )
 
     # summary of match distances
@@ -834,11 +839,11 @@ def match_bus_stops_to_roadway_nodes(
         feed_tables["stop_times"].drop(columns=["geometry_bus", "_merge"], inplace=True)
 
 
-def create_bus_routes(
+def create_bus_routes(  # noqa: PLR0912, PLR0915
     bus_stop_links_gdf: gpd.GeoDataFrame,
     feed_tables: Dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
-    local_crs: str,
+    _local_crs: str,  # Unused but kept for API consistency
     crs_units: str,
     trace_shape_ids: Optional[List[str]] = None,
 ):
@@ -891,7 +896,8 @@ def create_bus_routes(
         - Original shape geometry is replaced with routed paths
     """
     if crs_units not in ["feet", "meters"]:
-        raise ValueError(f"crs_units must be on of 'feet' or 'meters'; received {crs_units}")
+        msg = f"crs_units must be on of 'feet' or 'meters'; received {crs_units}"
+        raise ValueError(msg)
 
     WranglerLogger.info(f"Creating bus routes between bus stops")
     WranglerLogger.debug(
@@ -920,7 +926,7 @@ def create_bus_routes(
 
     current_shape_id = None
     current_shape_pt_sequence = None
-    for idx, row in bus_stop_links_gdf.iterrows():
+    for _idx, row in bus_stop_links_gdf.iterrows():
         # restart for each shape_id
         if current_shape_id != row["shape_id"]:
             current_shape_pt_sequence = 1
@@ -1219,7 +1225,7 @@ def add_additional_data_to_stops(
     )
 
 
-def add_additional_data_to_shapes(
+def add_additional_data_to_shapes(  # noqa: PLR0915
     feed_tables: Dict[str, pd.DataFrame],
     local_crs: str,
     crs_units: str,
@@ -1404,9 +1410,13 @@ def add_additional_data_to_shapes(
         shape_indices = shape_df.index.values
 
         # Use spatial index for efficient nearest neighbor search
-        from sklearn.neighbors import BallTree
-
         # Build BallTree for just this shape's points
+        try:
+            from sklearn.neighbors import BallTree  # noqa: PLC0415
+        except ImportError as e:
+            msg = "sklearn is required for transit shape processing. Install with: pip install scikit-learn"
+            raise ImportError(msg) from e
+        
         shape_coords = np.array([(geom.x, geom.y) for geom in shape_df.geometry])
         assert len(shape_coords) == len(shape_df)
         shape_tree = BallTree(shape_coords)
@@ -1479,7 +1489,7 @@ def add_additional_data_to_shapes(
     WranglerLogger.info("Finished adding stop information to shapes")
 
 
-def add_stations_and_links_to_roadway_network(
+def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
     feed_tables: Dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
     local_crs: str,
@@ -1919,7 +1929,7 @@ def add_stations_and_links_to_roadway_network(
         for trace_shape_id in trace_shape_ids:
             WranglerLogger.debug(
                 f"trace feed_tables['stops'] for {trace_shape_id}:\n"
-                f"{feed_tables['stops'].loc[feed_tables['stops']['shape_ids'].apply(lambda x: isinstance(x, list) and trace_shape_id in x)]}"
+                f"{feed_tables['stops'].loc[feed_tables['stops']['shape_ids'].apply(lambda x, tid=trace_shape_id: isinstance(x, list) and tid in x)]}"
             )
 
     feed_tables["stops"]["station_node_id"] = feed_tables["stops"]["stop_id"].map(
@@ -1945,7 +1955,7 @@ def add_stations_and_links_to_roadway_network(
         for trace_shape_id in trace_shape_ids:
             WranglerLogger.debug(
                 f"trace feed_tables['stops'] for {trace_shape_id}:\n"
-                f"{feed_tables['stops'].loc[feed_tables['stops']['shape_ids'].apply(lambda x: isinstance(x, list) and trace_shape_id in x)]}"
+                f"{feed_tables['stops'].loc[feed_tables['stops']['shape_ids'].apply(lambda x, tid=trace_shape_id: isinstance(x, list) and tid in x)]}"
             )
 
     feed_tables["stops"].drop(columns=["station_node_id"], inplace=True)
@@ -2015,7 +2025,7 @@ def add_stations_and_links_to_roadway_network(
     return stop_id_to_model_node_id_dict, bus_stop_links_gdf
 
 
-def create_feed_from_gtfs_model(
+def create_feed_from_gtfs_model(  # noqa: PLR0915
     gtfs_model: GtfsModel,
     roadway_net: RoadwayNetwork,
     local_crs: str,
@@ -2024,7 +2034,7 @@ def create_feed_from_gtfs_model(
     frequency_method: str,
     default_frequency_for_onetime_route: int = 10800,
     add_stations_and_links: bool = True,
-    skip_stop_agencies: Optional[List[str]] = None,
+    _skip_stop_agencies: Optional[List[str]] = None,  # Unused - for future implementation
     trace_shape_ids: Optional[List[str]] = None,
 ) -> Feed:
     """Convert GTFS model to Wrangler Feed with stops mapped to roadway network.
@@ -2097,7 +2107,8 @@ def create_feed_from_gtfs_model(
     """
     WranglerLogger.debug(f"create_feed_from_gtfsmodel()")
     if crs_units not in ["feet", "meters"]:
-        raise ValueError(f"crs_units must be on of 'feet' or 'meters'; received {crs_units}")
+        msg = f"crs_units must be on of 'feet' or 'meters'; received {crs_units}"
+        raise ValueError(msg)
 
     # Convert roadway_net.nodes_df GeoDataFrame if needed (modifying in place)
     if not isinstance(roadway_net.nodes_df, gpd.GeoDataFrame):
@@ -2157,9 +2168,8 @@ def create_feed_from_gtfs_model(
         )
 
     if not add_stations_and_links:
-        raise NotImplementedError(
-            "create_feed_from_gtfs_feed() doesn't implement add_stations_and_links==False."
-        )
+        msg = "create_feed_from_gtfs_feed() doesn't implement add_stations_and_links==False."
+        raise NotImplementedError(msg)
 
     # Add helpful extra data to shapes table
     add_additional_data_to_shapes(feed_tables, local_crs, crs_units)
@@ -2266,27 +2276,27 @@ def create_feed_from_gtfs_model(
             geometry=pd.NamedAgg(column="geometry", aggfunc="first"),
             agency_ids=pd.NamedAgg(
                 column="agency_ids",
-                aggfunc=lambda x: list(set([item for sublist in x for item in sublist])),
+                aggfunc=lambda x: list({item for sublist in x for item in sublist}),
             ),
             agency_names=pd.NamedAgg(
                 column="agency_names",
-                aggfunc=lambda x: list(set([item for sublist in x for item in sublist])),
+                aggfunc=lambda x: list({item for sublist in x for item in sublist}),
             ),
             route_ids=pd.NamedAgg(
                 column="route_ids",
-                aggfunc=lambda x: list(set([item for sublist in x for item in sublist])),
+                aggfunc=lambda x: list({item for sublist in x for item in sublist}),
             ),
             route_names=pd.NamedAgg(
                 column="route_names",
-                aggfunc=lambda x: list(set([item for sublist in x for item in sublist])),
+                aggfunc=lambda x: list({item for sublist in x for item in sublist}),
             ),
             route_types=pd.NamedAgg(
                 column="route_types",
-                aggfunc=lambda x: list(set([item for sublist in x for item in sublist])),
+                aggfunc=lambda x: list({item for sublist in x for item in sublist}),
             ),
             shape_ids=pd.NamedAgg(
                 column="shape_ids",
-                aggfunc=lambda x: list(set([item for sublist in x for item in sublist])),
+                aggfunc=lambda x: list({item for sublist in x for item in sublist}),
             ),
             is_parent=pd.NamedAgg(column="is_parent", aggfunc=any),
             is_bus_stop=pd.NamedAgg(column="is_bus_stop", aggfunc=any),
@@ -2302,9 +2312,9 @@ def create_feed_from_gtfs_model(
     )
 
     # Log all tables
-    for table_name in feed_tables:
+    for table_name, table_data in feed_tables.items():
         WranglerLogger.debug(
-            f"Before creating Feed object, feed_tables[{table_name}]:\n{feed_tables[table_name]}"
+            f"Before creating Feed object, feed_tables[{table_name}]:\n{table_data}"
         )
 
     # create Feed object from results of the above
@@ -2317,7 +2327,7 @@ def create_feed_from_gtfs_model(
         raise e
 
 
-def filter_transit_by_boundary(  # noqa: PLR0915
+def filter_transit_by_boundary(  # noqa: PLR0912, PLR0915
     transit_data: Union[GtfsModel, Feed],
     boundary: Union[str, Path, gpd.GeoDataFrame],
     partially_include_route_type_action: Optional[dict[RouteType, str]] = None,
@@ -2441,9 +2451,8 @@ def filter_transit_by_boundary(  # noqa: PLR0915
     normalized_route_type_action = {}
     for key, value in partially_include_route_type_action.items():
         if not isinstance(key, RouteType):
-            raise TypeError(
-                f"Keys in partially_include_route_type_action must be RouteType enum, got {type(key)}"
-            )
+            msg = f"Keys in partially_include_route_type_action must be RouteType enum, got {type(key)}"
+            raise TypeError(msg)
         normalized_route_type_action[key.value] = value
     partially_include_route_type_action = normalized_route_type_action
 
@@ -2561,7 +2570,7 @@ def filter_transit_by_boundary(  # noqa: PLR0915
                 boundary_changes = stop_boundary_status.ne(stop_boundary_status.shift()).cumsum()
                 num_segments = boundary_changes.nunique()
 
-                if num_segments > 2:
+                if num_segments > MIN_ROUTE_SEGMENTS:
                     # Complex case: route exits and re-enters boundary
                     route_info = routes_df[routes_df.route_id == route_id].iloc[0]
                     route_name = route_info.get("route_short_name", route_id)
@@ -2695,17 +2704,15 @@ def filter_transit_by_boundary(  # noqa: PLR0915
     # Update other tables in transit_data in place
     if is_gtfs:
         # For GtfsModel, also filter shapes and other tables if they exist
-        if hasattr(transit_data, "agency") and transit_data.agency is not None:
-            # Keep only agencies referenced by remaining routes
-            if "agency_id" in filtered_routes.columns:
+        if (hasattr(transit_data, "agency") and transit_data.agency is not None
+            and "agency_id" in filtered_routes.columns):
                 agency_ids = set(filtered_routes.agency_id.dropna().unique())
                 transit_data.agency = transit_data.agency[
                     transit_data.agency.agency_id.isin(agency_ids)
                 ]
 
-        if hasattr(transit_data, "shapes") and transit_data.shapes is not None:
-            # Keep only shapes referenced by remaining trips
-            if "shape_id" in filtered_trips.columns:
+        if (hasattr(transit_data, "shapes") and transit_data.shapes is not None
+            and "shape_id" in filtered_trips.columns):
                 shape_ids = set(filtered_trips.shape_id.dropna().unique())
                 transit_data.shapes = transit_data.shapes[
                     transit_data.shapes.shape_id.isin(shape_ids)
@@ -2733,9 +2740,8 @@ def filter_transit_by_boundary(  # noqa: PLR0915
 
     else:  # Feed
         # For Feed, also handle frequencies and shapes
-        if hasattr(transit_data, "shapes") and transit_data.shapes is not None:
-            # Keep only shapes referenced by remaining trips
-            if "shape_id" in filtered_trips.columns:
+        if (hasattr(transit_data, "shapes") and transit_data.shapes is not None
+            and "shape_id" in filtered_trips.columns):
                 shape_ids = set(filtered_trips.shape_id.dropna().unique())
                 transit_data.shapes = transit_data.shapes[
                     transit_data.shapes.shape_id.isin(shape_ids)
@@ -2748,7 +2754,7 @@ def filter_transit_by_boundary(  # noqa: PLR0915
             ]
 
 
-def drop_transit_agency(
+def drop_transit_agency(  # noqa: PLR0915
     transit_data: Union[GtfsModel, Feed],
     agency_id: Union[str, list[str]],
 ) -> None:
