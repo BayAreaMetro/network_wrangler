@@ -114,6 +114,8 @@ source = ["network_wrangler"]
 [tool.mypy]
 files = "network_wrangler"
 python_version = "3.9"
+namespace_packages = true
+explicit_package_bases = true
 follow_imports = "skip"
 show_error_codes = true
 show_error_context = true

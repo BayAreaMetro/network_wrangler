@@ -18,6 +18,9 @@ from ..utils.io_table import unzip_file, write_table
 from .feed.feed import Feed
 from .network import TransitNetwork
 
+# Constants
+MAX_INVALID_STOPS_DISPLAY = 20
+
 
 def _feed_path_ref(path: Path) -> Path:
     if path.suffix == ".zip":
@@ -29,7 +32,7 @@ def _feed_path_ref(path: Path) -> Path:
     return path
 
 
-def load_feed_from_path(
+def load_feed_from_path(  # noqa: PLR0915
     feed_path: Union[Path, str],
     file_format: TransitFileTypes = "txt",
     wrangler_flavored: bool = True,
@@ -75,8 +78,8 @@ def load_feed_from_path(
     _ambiguous_files = [t for t, v in feed_possible_files.items() if len(v) > 1]
     if _ambiguous_files:
         WranglerLogger.warning(
-            f"! More than one file matches following tables. " + \
-            f"Using the first on the list: {_ambiguous_files}"
+            f"! More than one file matches following tables. "
+            + f"Using the first on the list: {_ambiguous_files}"
         )
 
     feed_files = {t: f[0] for t, f in feed_possible_files.items()}
@@ -139,17 +142,15 @@ def load_feed_from_path(
             str
         )  # make stop_times.stop_id a string
         stop_ids = feed_dfs["stop_times"][["stop_id"]].drop_duplicates().reset_index(drop=True)
-        WranglerLogger.debug(
-            f"After filtering stop_times to stop_ids (len={len(stop_ids):,})"
-        )
+        WranglerLogger.debug(f"After filtering stop_times to stop_ids (len={len(stop_ids):,})")
 
         feed_dfs["stops"]["stop_id"] = feed_dfs["stops"]["stop_id"].astype(
             str
         )  # make stops.stop_id a string
-        
+
         # Save a copy of all stops before filtering
         all_stops_df = feed_dfs["stops"].copy()
-        
+
         # First filter to stops referenced in stop_times
         feed_dfs["stops"] = feed_dfs["stops"].merge(right=stop_ids, how="left", indicator=True)
         WranglerLogger.debug(
@@ -161,38 +162,39 @@ def load_feed_from_path(
             .drop(columns=["_merge"])
             .reset_index(drop=True)
         )
-        
+
         # Now check if any of these stops reference parent stations
         if "parent_station" in feed_dfs["stops"].columns:
             # Get parent stations that are referenced by kept stops
             parent_stations = feed_dfs["stops"]["parent_station"].dropna().unique()
             parent_stations = [ps for ps in parent_stations if ps != ""]  # Remove empty strings
-            
+
             if len(parent_stations) > 0:
                 WranglerLogger.info(
                     f"Found {len(parent_stations)} parent stations referenced by kept stops"
                 )
-                
+
                 # Find parent stations that aren't already in our filtered stops
                 existing_stop_ids = set(feed_dfs["stops"]["stop_id"])
-                missing_parent_stations = [ps for ps in parent_stations if ps not in existing_stop_ids]
-                
+                missing_parent_stations = [
+                    ps for ps in parent_stations if ps not in existing_stop_ids
+                ]
+
                 if len(missing_parent_stations) > 0:
                     WranglerLogger.debug(
                         f"Adding back {len(missing_parent_stations)} missing parent stations"
                     )
-                    
+
                     # Get the parent station records from our saved copy
                     parent_station_records = all_stops_df[
                         all_stops_df["stop_id"].isin(missing_parent_stations)
                     ]
-                    
+
                     # Append parent stations to filtered stops
                     feed_dfs["stops"] = pd.concat(
-                        [feed_dfs["stops"], parent_station_records], 
-                        ignore_index=True
+                        [feed_dfs["stops"], parent_station_records], ignore_index=True
                     )
-                    
+
                     WranglerLogger.debug(
                         f"After adding parent stations, stops count: {len(feed_dfs['stops']):,}"
                     )
@@ -219,11 +221,11 @@ def load_feed_from_path(
             # Log unique invalid stop_ids
             invalid_stop_ids = invalid_stop_times["stop_id"].unique()
             WranglerLogger.warning(
-                f"Invalid stop_ids ({len(invalid_stop_ids)} unique): {invalid_stop_ids[:20].tolist()}..."
+                f"Invalid stop_ids ({len(invalid_stop_ids)} unique): {invalid_stop_ids[:MAX_INVALID_STOPS_DISPLAY].tolist()}..."
             )
-            if len(invalid_stop_ids) > 20:
+            if len(invalid_stop_ids) > MAX_INVALID_STOPS_DISPLAY:
                 WranglerLogger.warning(
-                    f"  ... and {len(invalid_stop_ids) - 20} more invalid stop_ids"
+                    f"  ... and {len(invalid_stop_ids) - MAX_INVALID_STOPS_DISPLAY} more invalid stop_ids"
                 )
 
             # Log sample of invalid entries with trip and route context
@@ -389,7 +391,7 @@ def write_transit(
     """
     out_dir = Path(out_dir)
     prefix = f"{prefix}_" if prefix else ""
-    
+
     # Determine the data source based on input type
     if isinstance(transit_obj, TransitNetwork):
         data_source = transit_obj.feed
@@ -402,7 +404,7 @@ def write_transit(
             f"transit_obj must be a TransitNetwork, Feed, or GtfsModel instance, "
             f"not {type(transit_obj).__name__}"
         )
-    
+
     # Write tables
     tables_written = 0
     for table in data_source.table_names:
@@ -411,7 +413,7 @@ def write_transit(
             outpath = out_dir / f"{prefix}{table}.{file_format}"
             write_table(df, outpath, overwrite=overwrite)
             tables_written += 1
-    
+
     WranglerLogger.info(f"Wrote {tables_written} {source_type} tables to {out_dir}")
 
 

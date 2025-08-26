@@ -234,8 +234,8 @@ class DBModelMixin:
         for ref_table_name, ref_field in fields_as_fks[pk_table_name][pk_field]:
             if ref_table_name not in self.table_names:
                 WranglerLogger.debug(
-                    f"Referencing table {ref_table_name} not in self.table_names - " + \
-                    f"skipping fk validation."
+                    f"Referencing table {ref_table_name} not in self.table_names - "
+                    + f"skipping fk validation."
                 )
                 continue
 
@@ -243,15 +243,15 @@ class DBModelMixin:
                 ref_table = self.get_table(ref_table_name)
             except RequiredTableError:
                 WranglerLogger.debug(
-                    f"Referencing table {ref_table_name} not yet set in " + \
-                    f"{type(self)} - skipping fk validation."
+                    f"Referencing table {ref_table_name} not yet set in "
+                    + f"{type(self)} - skipping fk validation."
                 )
                 continue
 
             if ref_field not in ref_table:
                 WranglerLogger.debug(
-                    f"Referencing field {ref_field} not in {ref_table_name} - " + \
-                    f"skipping fk validation."
+                    f"Referencing field {ref_field} not in {ref_table_name} - "
+                    + f"skipping fk validation."
                 )
                 continue
 
@@ -259,8 +259,8 @@ class DBModelMixin:
             all_valid = all_valid and valid
             if _missing:
                 WranglerLogger.error(
-                    f"Following values missing from {pk_table_name}.{pk_field} that " + \
-                    f"are referenced by {_missing}:\n{ref_table}"
+                    f"Following values missing from {pk_table_name}.{pk_field} that "
+                    + f"are referenced by {_missing}:\n{ref_table}"
                 )
         return all_valid
 
@@ -300,30 +300,29 @@ class DBModelMixin:
             # WranglerLogger.debug(f"Looking for PK in {pkref_table_name}.{pkref_field}.")
             if field not in table:
                 WranglerLogger.warning(
-                    f"Foreign key value {field} not in {table_name} - " + \
-                    f"skipping validation"
+                    f"Foreign key value {field} not in {table_name} - " + f"skipping validation"
                 )
                 continue
 
             if pkref_table_name not in self.table_names:
                 WranglerLogger.debug(
-                    f"PK table {pkref_table_name} for specified FK " + \
-                    f"{table_name}.{field} not in table list - skipping validation."
+                    f"PK table {pkref_table_name} for specified FK "
+                    + f"{table_name}.{field} not in table list - skipping validation."
                 )
                 continue
             try:
                 pkref_table = self.get_table(pkref_table_name)
             except RequiredTableError:
                 WranglerLogger.debug(
-                    f"PK table {pkref_table_name} for specified FK " + \
-                    f"{table_name}.{field} not in {type(self)} - " + \
-                    f"skipping validation."
+                    f"PK table {pkref_table_name} for specified FK "
+                    + f"{table_name}.{field} not in {type(self)} - "
+                    + f"skipping validation."
                 )
                 continue
             if pkref_field not in pkref_table:
                 WranglerLogger.error(
-                    f"!!! {pkref_table_name} missing {pkref_field} field used as FK " + \
-                    f"ref in {table_name}.{field}."
+                    f"!!! {pkref_table_name} missing {pkref_field} field used as FK "
+                    + f"ref in {table_name}.{field}."
                 )
                 all_valid = False
                 continue
@@ -334,8 +333,8 @@ class DBModelMixin:
             valid, missing = fk_in_pk(pkref_table[pkref_field], table[field])
             if missing:
                 WranglerLogger.error(
-                    f"!!! {pkref_table_name}.{pkref_field} missing values used as FK " + \
-                    f"in {table_name}.{field}: \n{missing}"
+                    f"!!! {pkref_table_name}.{pkref_field} missing values used as FK "
+                    + f"in {table_name}.{field}: \n{missing}"
                 )
             all_valid = valid and all_valid
 

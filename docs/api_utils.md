@@ -36,6 +36,7 @@ Utility functions and helper classes used throughout Network Wrangler.
         heading_level: 3
 
 ## Transit Utilities
+
 ::: network_wrangler.utils.transit
     options:
         heading_level: 3

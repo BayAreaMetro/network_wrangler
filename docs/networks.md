@@ -79,7 +79,6 @@ See:
 - [`WranglerFrequenciesTable`](api_transit.md#network_wrangler.models.gtfs.tables.WranglerFrequenciesTable)
 - [`AgenciesTable`](api_transit.md#network_wrangler.models.gtfs.tables.AgenciesTable)
 
-
 ### Transit Validation
 
 TransitNetworks can be validated using the following tools:

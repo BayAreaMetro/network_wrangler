@@ -59,7 +59,7 @@ def _nodes_to_graph_nodes(nodes_df: GeoDataFrame) -> GeoDataFrame:
     graph_nodes_df = _drop_complex_df_columns(graph_nodes_df)
 
     # the model_node_id is the index
-    graph_nodes_df.set_index('model_node_id', inplace=True)
+    graph_nodes_df.set_index("model_node_id", inplace=True)
 
     # OSMNX is expecting id, x, y
     graph_nodes_df["id"] = graph_nodes_df.index
@@ -107,7 +107,7 @@ def _links_to_graph_links(
     graph_links_df = graph_links_df.rename(columns={"A": "u", "B": "v"})
 
     # lmz: Why not use model_link_id as the key rather than index?
-    
+
     graph_links_df["key"] = graph_links_df.index.copy()
     # Per osmnx u,v,key should be a multi-index;
     #     https://osmnx.readthedocs.io/en/stable/osmnx.html#osmnx.utils_graph.graph_from_gdfs
@@ -151,7 +151,9 @@ def links_nodes_to_ox_graph(
     # WranglerLogger.debug(f"graph_links_df:\n{graph_links_df}")
 
     try:
-        WranglerLogger.debug(f"starting ox.graph_from_gdfs() with {len(graph_nodes_df)=:,} {len(graph_links_df)=:,}")
+        WranglerLogger.debug(
+            f"starting ox.graph_from_gdfs() with {len(graph_nodes_df)=:,} {len(graph_links_df)=:,}"
+        )
         G = ox.graph_from_gdfs(graph_nodes_df, graph_links_df)
 
     except AttributeError as attr_error:

@@ -2,7 +2,7 @@
 
 Network Wrangler uses [pandera's DataFrameModel](https://pandera.readthedocs.io/en/stable/reference/generated/pandera.api.pandas.model.DataFrameModel.html) as the base class for all data validation models. The following diagrams show how the core network classes contain these data models and their inheritance relationships:
 
-### Network Containment Diagram
+## Network Containment Diagram
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': {'fontSize': '12px'}}}%%

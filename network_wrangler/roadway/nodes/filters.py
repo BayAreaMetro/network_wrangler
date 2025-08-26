@@ -58,5 +58,7 @@ def filter_nodes_to_links(
     """
     _node_ids = node_ids_in_links(links_df, nodes_df)
     nodes_in_links = nodes_df.loc[nodes_df.model_node_id.isin(_node_ids)]
-    WranglerLogger.debug(f"filter_nodes_to_links(): Selected {len(nodes_in_links):,} of {len(nodes_df):,} nodes.")
+    WranglerLogger.debug(
+        f"filter_nodes_to_links(): Selected {len(nodes_in_links):,} of {len(nodes_df):,} nodes."
+    )
     return nodes_in_links
