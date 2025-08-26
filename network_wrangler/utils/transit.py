@@ -1,8 +1,11 @@
-"""Utilities for getting GTFS into wrangler"""
+"""Utilities for getting GTFS into wrangler."""
 
 import pprint
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal, Optional, Union
+
+# Constants
+MAX_TRUNCATION_WARNING_STOPS = 10
 
 import geopandas as gpd
 import networkx as nx
@@ -2314,10 +2317,10 @@ def create_feed_from_gtfs_model(
         raise e
 
 
-def filter_transit_by_boundary(
+def filter_transit_by_boundary(  # noqa: PLR0915
     transit_data: Union[GtfsModel, Feed],
     boundary: Union[str, Path, gpd.GeoDataFrame],
-    partially_include_route_type_action: Optional[Dict[RouteType, str]] = None,
+    partially_include_route_type_action: Optional[dict[RouteType, str]] = None,
 ) -> None:
     """Filter transit routes based on whether they have stops within a boundary.
 
@@ -2747,7 +2750,7 @@ def filter_transit_by_boundary(
 
 def drop_transit_agency(
     transit_data: Union[GtfsModel, Feed],
-    agency_id: Union[str, List[str]],
+    agency_id: Union[str, list[str]],
 ) -> None:
     """Remove all routes, trips, stops, etc. for a specific agency or agencies.
 
@@ -2766,10 +2769,7 @@ def drop_transit_agency(
         >>> drop_transit_agency(gtfs_model, ["SFMTA", "AC"])
     """
     # Convert single agency_id to list for uniform handling
-    if isinstance(agency_id, str):
-        agency_ids_to_remove = [agency_id]
-    else:
-        agency_ids_to_remove = agency_id
+    agency_ids_to_remove = [agency_id] if isinstance(agency_id, str) else agency_id
 
     WranglerLogger.info(f"Removing transit data for agency/agencies: {agency_ids_to_remove}")
 
@@ -2864,9 +2864,8 @@ def drop_transit_agency(
         transit_data.agency = filtered_agency
 
     # Handle shapes table
-    if hasattr(transit_data, "shapes") and transit_data.shapes is not None:
-        # Keep only shapes referenced by remaining trips
-        if "shape_id" in trips_to_keep.columns:
+    if (hasattr(transit_data, "shapes") and transit_data.shapes is not None 
+        and "shape_id" in trips_to_keep.columns):
             shape_ids = set(trips_to_keep.shape_id.dropna().unique())
             filtered_shapes = transit_data.shapes[transit_data.shapes.shape_id.isin(shape_ids)]
             WranglerLogger.info(
@@ -2898,7 +2897,7 @@ def drop_transit_agency(
         ]
 
 
-def truncate_route_at_stop(
+def truncate_route_at_stop(  # noqa: PLR0912, PLR0915
     transit_data: Union[GtfsModel, Feed],
     route_id: str,
     direction_id: int,
@@ -3019,7 +3018,7 @@ def truncate_route_at_stop(
 
             # Get removed stops details
             removed_stop_ids = set(trip_stop_times.stop_id) - set(truncated_stops.stop_id)
-            if removed_stop_ids and len(removed_stop_ids) <= 10:
+            if removed_stop_ids and len(removed_stop_ids) <= MAX_TRUNCATION_WARNING_STOPS:
                 # Get stop names for removed stops
                 removed_stops_info = stops_df[stops_df.stop_id.isin(removed_stop_ids)][
                     ["stop_id", "stop_name"]
@@ -3044,7 +3043,7 @@ def truncate_route_at_stop(
 
     # Combine all stop times (truncated and non-truncated)
     other_stop_times = stop_times_df[~stop_times_df.trip_id.isin(trip_ids_to_truncate)]
-    all_stop_times = pd.concat([other_stop_times] + truncated_stop_times, ignore_index=True)
+    all_stop_times = pd.concat([other_stop_times, *truncated_stop_times], ignore_index=True)
 
     # Find stops that are still referenced
     stops_still_used = set(all_stop_times.stop_id.unique())
