@@ -71,26 +71,6 @@ FERRY_ROUTE_TYPES = [RouteType.FERRY]
 """GTFS route types which trigger 'ferry_only' link creation in add_stations_and_links_to_roadway_network()
 """
 
-CONNECTIVITY_MATCH_ROUTE_TYPES = [RouteType.SUBWAY, RouteType.RAIL, RouteType.FERRY]
-"""GTFS route types that should use connectivity-aware matching.
-"""
-
-STATION_ONLY_ROUTE_TYPES = list(set(STATION_ROUTE_TYPES) - set(MIXED_TRAFFIC_ROUTE_TYPES))
-"""GTFS route types that operate ONLY at stations (not in mixed traffic).
-
-This is STATION_ROUTE_TYPES minus MIXED_TRAFFIC_ROUTE_TYPES.
-"""
-
-MIXED_TRAFFIC_ONLY_ROUTE_TYPES = list(set(MIXED_TRAFFIC_ROUTE_TYPES) - set(STATION_ROUTE_TYPES))
-"""GTFS route types that operate ONLY in mixed traffic.
-
-This is MIXED_TRAFFIC_ROUTE_TYPES minus STATION_ROUTE_TYPES.
-"""
-
-MIXED_TRAFFIC_AND_STATION_ROUTE_TYPES = list(
-    set(MIXED_TRAFFIC_ROUTE_TYPES).intersection(STATION_ROUTE_TYPES)
-)
-"""Route types that operate in both mixed traffic and at stations."""
 
 FEET_PER_MILE = 5280.0
 """Feet to miles conversion constant."""
@@ -1085,6 +1065,7 @@ def add_additional_data_to_stops(
     comprehensive metadata about which routes and agencies serve each stop.
 
     Process Steps:
+
     1. Joins stop_times with trips to get route and shape information
     2. Joins with routes and agencies to get route types and agency names
     3. Groups by stop_id to aggregate all serving routes/agencies
@@ -1237,6 +1218,7 @@ def add_additional_data_to_shapes(  # noqa: PLR0915
     then matches shape points to nearby stops and updates their locations.
 
     Process Steps:
+
     1. Converts shapes to GeoDataFrame if needed (using shape_pt_lon/lat)
     2. Joins with trips, routes, and agencies to add metadata
     3. Projects to local CRS for distance calculations
