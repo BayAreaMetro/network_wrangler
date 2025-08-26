@@ -1553,6 +1553,9 @@ def add_stations_and_links_to_roadway_network(
     station_road_links_gdf['truck_access'] = False
     station_road_links_gdf['bus_only'] = False
     station_road_links_gdf['lanes'] = 0
+    if 'highway' in roadway_net.links_df.columns:
+        station_road_links_gdf['highway'] = 'transit'
+
     # Set distance
     station_road_links_gdf.to_crs(local_crs, inplace=True)
     station_road_links_gdf['length'] = station_road_links_gdf.length
