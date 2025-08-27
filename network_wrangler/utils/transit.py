@@ -2,7 +2,7 @@
 
 import pprint
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Tuple, Optional, Union
 
 # Constants
 MAX_TRUNCATION_WARNING_STOPS = 10
