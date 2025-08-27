@@ -2,7 +2,7 @@
 
 import pprint
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Tuple, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 # Constants
 MAX_TRUNCATION_WARNING_STOPS = 10
@@ -86,11 +86,11 @@ MAX_DISTANCE_STOP = {
 
 
 def create_feed_frequencies(  # noqa: PLR0915
-    feed_tables: Dict[str, pd.DataFrame],
-    timeperiods: Dict[str, Tuple[str, str]],
+    feed_tables: dict[str, pd.DataFrame],
+    timeperiods: dict[str, tuple[str, str]],
     frequency_method: str,
     default_frequency_for_onetime_route: int = 10800,
-    trace_shape_ids: Optional[List[str]] = None,
+    trace_shape_ids: Optional[list[str]] = None,
 ):
     """Create frequencies table and convert GTFS-style tables to Wrangler-style Feed tables.
 
@@ -110,7 +110,7 @@ def create_feed_frequencies(  # noqa: PLR0915
     See [GTFS frequencies.txt](https://gtfs.org/documentation/schedule/reference/#frequenciestxt)
 
     Args:
-        feed_tables (Dict[str, pd.DataFrame]): Dictionary of feed tables to modify in place:
+        feed_tables (dict[str, pd.DataFrame]): dictionary of feed tables to modify in place:
             Required input columns:
             - 'stop_times': trip_id, stop_id, stop_sequence, departure_time
             - 'trips': trip_id, route_id, direction_id, shape_id, service_id
@@ -121,7 +121,7 @@ def create_feed_frequencies(  # noqa: PLR0915
             - 'trips': Consolidated to one row per shape_id with new trip_id
             - 'frequencies': Created with trip_id, start_time, end_time, headway_secs
 
-        timeperiods (Dict[str, Tuple[str, str]]): Time period labels to time spans.
+        timeperiods (dict[str, tuple[str, str]]): Time period labels to time spans.
             Example: {'EA': ('03:00','06:00'), 'AM': ('06:00','10:00')}
         frequency_method (str): Method for calculating headways:
             - 'uniform_headway': timeperiod_duration / number_of_trips
@@ -129,7 +129,7 @@ def create_feed_frequencies(  # noqa: PLR0915
             - 'median_headway': median of time gaps between consecutive trips
         default_frequency_for_onetime_route (int, optional): Default headway in seconds
             for routes with only one trip in a period. Defaults to 10800 (3 hours).
-        trace_shape_ids (Optional[List[str]]): Shape IDs to log detailed debug output for.
+        trace_shape_ids (Optional[list[str]]): Shape IDs to log detailed debug output for.
 
     Returns:
         None - Modifies feed_tables in place
@@ -460,7 +460,7 @@ def create_feed_frequencies(  # noqa: PLR0915
     WranglerLogger.debug(f"feed_tables['stop_times']:\n{feed_tables['stop_times']}")
 
 
-def build_transit_graph(transit_links_df: pd.DataFrame) -> Dict[int, set]:
+def build_transit_graph(transit_links_df: pd.DataFrame) -> dict[int, set]:
     """Build directed adjacency graph from transit links.
 
     Creates a dictionary-based graph representation where each node maps to a set of
@@ -473,7 +473,7 @@ def build_transit_graph(transit_links_df: pd.DataFrame) -> Dict[int, set]:
             - B (int): Target node ID
 
     Returns:
-        Dict[int, set]: Adjacency dictionary where:
+        dict[int, set]: Adjacency dictionary where:
             - Keys are node IDs that appear in the links
             - Values are sets of node IDs directly reachable from that node
             - Empty set for nodes with no outgoing edges
@@ -497,12 +497,12 @@ def build_transit_graph(transit_links_df: pd.DataFrame) -> Dict[int, set]:
 
 
 def match_bus_stops_to_roadway_nodes(  # noqa: PLR0912, PLR0915
-    feed_tables: Dict[str, pd.DataFrame],
+    feed_tables: dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
     local_crs: str,
     crs_units: str,
     max_distance: float,
-    trace_shape_ids: Optional[List[str]] = None,
+    trace_shape_ids: Optional[list[str]] = None,
 ):
     """Match bus stops to bus-accessible nodes in the roadway network.
 
@@ -535,7 +535,7 @@ def match_bus_stops_to_roadway_nodes(  # noqa: PLR0912, PLR0915
         - geometry: Updated to matched road node location for bus stops
 
     Args:
-        feed_tables: Dictionary of GTFS feed tables. Expects:
+        feed_tables: dictionary of GTFS feed tables. Expects:
             - 'stops': Must have route_types column (list of RouteType enums)
             - 'shapes': Shape points to update
             - 'stop_times': Optional, updated if present as GeoDataFrame
@@ -821,11 +821,11 @@ def match_bus_stops_to_roadway_nodes(  # noqa: PLR0912, PLR0915
 
 def create_bus_routes(  # noqa: PLR0912, PLR0915
     bus_stop_links_gdf: gpd.GeoDataFrame,
-    feed_tables: Dict[str, pd.DataFrame],
+    feed_tables: dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
     _local_crs: str,  # Unused but kept for API consistency
     crs_units: str,
-    trace_shape_ids: Optional[List[str]] = None,
+    trace_shape_ids: Optional[list[str]] = None,
 ):
     """Find shortest paths through the bus network between consecutive bus stops.
 
@@ -858,7 +858,7 @@ def create_bus_routes(  # noqa: PLR0912, PLR0915
             - A (int): Current stop's model_node_id
             - B (int): Next stop's model_node_id
             - route_id, route_type, trip_id, direction_id: Route metadata
-        feed_tables: Dictionary with required tables:
+        feed_tables: dictionary with required tables:
             - 'stops': Must have is_bus_stop column
             - 'shapes': Will be modified to replace bus shapes
         roadway_net: RoadwayNetwork with bus modal graph
@@ -1057,7 +1057,7 @@ def create_bus_routes(  # noqa: PLR0912, PLR0915
 
 
 def add_additional_data_to_stops(
-    feed_tables: Dict[str, pd.DataFrame],
+    feed_tables: dict[str, pd.DataFrame],
 ):
     """Updates feed_tables['stops'] with additional metadata about routes and agencies.
 
@@ -1086,7 +1086,7 @@ def add_additional_data_to_stops(
     - is_parent (bool): True if other stops reference this as parent_station
 
     Args:
-        feed_tables: Dictionary with required tables:
+        feed_tables: dictionary with required tables:
             - 'stop_times': Links stops to trips
             - 'trips': Links trips to routes and shapes
             - 'routes': Route information including type
@@ -1207,10 +1207,10 @@ def add_additional_data_to_stops(
 
 
 def add_additional_data_to_shapes(  # noqa: PLR0915
-    feed_tables: Dict[str, pd.DataFrame],
+    feed_tables: dict[str, pd.DataFrame],
     local_crs: str,
     crs_units: str,
-    trace_shape_ids: Optional[List[str]] = None,
+    trace_shape_ids: Optional[list[str]] = None,
 ):
     """Updates feed_tables['shapes'] with route/trip metadata and snaps shape points to stops.
 
@@ -1253,7 +1253,7 @@ def add_additional_data_to_shapes(  # noqa: PLR0915
         - geometry: Stop location added from stops table
 
     Args:
-        feed_tables: Dictionary with required tables:
+        feed_tables: dictionary with required tables:
             - 'shapes': Shape points to update
             - 'trips': Trip information
             - 'routes': Route information
@@ -1472,12 +1472,12 @@ def add_additional_data_to_shapes(  # noqa: PLR0915
 
 
 def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
-    feed_tables: Dict[str, pd.DataFrame],
+    feed_tables: dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
     local_crs: str,
     crs_units: str,
-    trace_shape_ids: Optional[List[str]] = None,
-) -> Tuple[Dict[str, int], gpd.GeoDataFrame]:
+    trace_shape_ids: Optional[list[str]] = None,
+) -> tuple[dict[str, int], gpd.GeoDataFrame]:
     """Add transit station nodes and dedicated transit links to the roadway network.
 
     Creates new roadway nodes for transit stations and adds dedicated transit links
@@ -1513,7 +1513,7 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
         - shape_model_node_id (int): Roadway node ID for the shape point
 
     Args:
-        feed_tables: Dictionary with required tables:
+        feed_tables: dictionary with required tables:
             - 'stops': Stop information with geometry
             - 'stop_times': Stop sequences for trips
             - 'shapes': Shape points between stops
@@ -1524,8 +1524,8 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
         trace_shape_ids: Optional shape IDs for debug logging
 
     Returns:
-        Tuple[Dict[str,int], gpd.GeoDataFrame]:
-            - Dictionary mapping new station stop_ids to model_node_ids
+        tuple[dict[str,int], gpd.GeoDataFrame]:
+            - dictionary mapping new station stop_ids to model_node_ids
             - GeoDataFrame of bus stop links (not added to network) with columns:
                 shape_id, stop_sequence, stop_id, stop_name, next_stop_id,
                 next_stop_name, A, B, geometry
@@ -2012,12 +2012,11 @@ def create_feed_from_gtfs_model(  # noqa: PLR0915
     roadway_net: RoadwayNetwork,
     local_crs: str,
     crs_units: str,
-    timeperiods: Dict[str, Tuple[str, str]],
+    timeperiods: dict[str, tuple[str, str]],
     frequency_method: str,
     default_frequency_for_onetime_route: int = 10800,
     add_stations_and_links: bool = True,
-    _skip_stop_agencies: Optional[List[str]] = None,  # Unused - for future implementation
-    trace_shape_ids: Optional[List[str]] = None,
+    trace_shape_ids: Optional[list[str]] = None,
 ) -> Feed:
     """Convert GTFS model to Wrangler Feed with stops mapped to roadway network.
 
@@ -2068,7 +2067,6 @@ def create_feed_from_gtfs_model(  # noqa: PLR0915
             for routes with one trip per period (default: 10800)
         add_stations_and_links: If True, add stations to roadway network
             (recommended, False not implemented)
-        skip_stop_agencies: Agency IDs using skip-stop patterns
         trace_shape_ids: Shape IDs for detailed debug logging
 
     Returns:
