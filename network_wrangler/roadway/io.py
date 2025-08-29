@@ -127,6 +127,7 @@ def load_roadway_from_dataframes(
     nodes_df: DataFrame,
     shapes_df: Optional[GeoDataFrame] = None,
     config: ConfigInputTypes = DefaultConfig,
+    filter_to_nodes: bool = False,
 ) -> RoadwayNetwork:
     """Creates a RoadwayNetwork from DataFrames with validation.
 
@@ -141,6 +142,7 @@ def load_roadway_from_dataframes(
         config: a Configuration object to update with the new configuration. Can be
             a dictionary, a path to a file, or a list of paths to files or a
             WranglerConfig instance. Defaults to None and will load defaults.
+        filter_to_nodes: if True, will filter links to only those that connect to nodes.
 
     Returns:
         (RoadwayNetwork) instance with validated data
@@ -162,6 +164,16 @@ def load_roadway_from_dataframes(
     # Process dataframes through the standard creation functions to ensure attrs are set
     WranglerLogger.debug("Processing nodes_df through data_to_nodes_df")
     processed_nodes_df = data_to_nodes_df(nodes_df, config=config)
+
+    if filter_to_nodes:
+        link_count = len(links_df)
+        links_df = links_df[
+            links_df["A"].isin(nodes_df.model_node_id) & links_df["B"].isin(nodes_df.model_node_id)
+        ]
+        WranglerLogger.debug(
+            f"Filtered links to only those that connect to nodes: "
+            f"filtered {link_count-len(links_df)} links"
+        )
 
     WranglerLogger.debug("Processing links_df through data_to_links_df")
     processed_links_df = data_to_links_df(links_df, nodes_df=processed_nodes_df)
