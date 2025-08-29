@@ -15,7 +15,8 @@ DEFAULT_CATEGORY: str = "any"
 
 DEFAULT_SEARCH_MODES: list = ["drive"]
 """
-lmz: Why isn't this any?
+This is a logical choice because you typically don't want a segment search from A--> F 
+that includes b,c,d,e (walk nodes) and B,C,D,E (drive modes) to mix and match.
 """
 
 DEFAULT_DELETE_MODES: list = ["any"]
