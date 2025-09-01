@@ -284,7 +284,7 @@ class TripsTable(DataFrameModel):
 
     Attributes:
         trip_id (str): Primary key. Required to be unique.
-        shape_id (str): Foreign key to `shape_id` in the shapes table.
+        shape_id (Optional[str]): Foreign key to `shape_id` in the shapes table.
         direction_id (DirectionID): The direction id. Required. Values can be:
             - 0: Outbound
             - 1: Inbound
@@ -304,7 +304,7 @@ class TripsTable(DataFrameModel):
     """
 
     trip_id: Series[str] = Field(nullable=False, unique=True, coerce=True)
-    shape_id: Series[str] = Field(nullable=False, coerce=True)
+    shape_id: Series[str] = Field(nullable=True, coerce=True)
     direction_id: Series[Category] = Field(
         dtype_kwargs={"categories": DirectionID}, coerce=True, nullable=False, default=0
     )
@@ -340,7 +340,7 @@ class WranglerTripsTable(TripsTable):
 
     Attributes:
         trip_id (str): Primary key. Required to be unique.
-        shape_id (str): Foreign key to `shape_id` in the shapes table.
+        shape_id (str): Foreign key to `shape_id` in the shapes table. **Required in Wrangler feeds.**
         direction_id (DirectionID): The direction id. Required. Values can be:
             - 0: Outbound
             - 1: Inbound
@@ -360,6 +360,7 @@ class WranglerTripsTable(TripsTable):
         projects (str): A comma-separated string value for projects that have been applied to this trip.
     """
 
+    shape_id: Series[str] = Field(nullable=False, coerce=True)  # Override to make required
     projects: Series[str] = Field(coerce=True, default="")
 
     class Config:
