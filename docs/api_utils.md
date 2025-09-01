@@ -35,12 +35,6 @@ Utility functions and helper classes used throughout Network Wrangler.
     options:
         heading_level: 3
 
-## Transit Utilities
-
-::: network_wrangler.utils.transit
-    options:
-        heading_level: 3
-
 ## Network and Geographic Utilities
 
 ::: network_wrangler.utils.net

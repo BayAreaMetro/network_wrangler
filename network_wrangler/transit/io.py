@@ -17,10 +17,8 @@ from ..models.gtfs.gtfs import GtfsModel
 from ..utils.geo import to_points_gdf
 from ..utils.io_table import unzip_file, write_table
 from .feed.feed import Feed
+from .filter import filter_feed_by_service_ids
 from .network import TransitNetwork
-
-# Constants
-MAX_INVALID_STOPS_DISPLAY = 20
 
 
 def _feed_path_ref(path: Path) -> Path:
@@ -85,186 +83,16 @@ def load_feed_from_path(  # noqa: PLR0915
 
     feed_files = {t: f[0] for t, f in feed_possible_files.items()}
     feed_dfs = {table: _read_table_from_file(table, file) for table, file in feed_files.items()}
-
+    
+    # Create the feed object first
+    feed_obj = load_feed_from_dfs(feed_dfs, wrangler_flavored=wrangler_flavored)
+    WranglerLogger.debug(f"loaded {type(feed_obj)} from dfs:\n{feed_obj}")
+    
+    # Apply service_ids filter if provided
     if service_ids_filter is not None:
-        WranglerLogger.info(f"Filtering trips to {len(service_ids_filter)} service_ids")
-        WranglerLogger.debug(f"Filtering service_ids: {service_ids_filter}")
-
-        # filter to trips for these service_ids
-        original_trip_count = len(feed_dfs["trips"])
-        feed_dfs["trips"]["service_id"] = feed_dfs["trips"]["service_id"].astype(
-            str
-        )  # make service_id a string
-        
-        # Create a DataFrame from the list for merging
-        service_ids_df = pd.DataFrame({"service_id": service_ids_filter})
-        feed_dfs["trips"] = feed_dfs["trips"].merge(
-            right=service_ids_df, on="service_id", how="left", indicator=True
-        )
-        WranglerLogger.debug(
-            f"feed_dfs['trips']._merge.value_counts():\n{feed_dfs['trips']._merge.value_counts()}"
-        )
-        feed_dfs["trips"] = (
-            feed_dfs["trips"]
-            .loc[feed_dfs["trips"]._merge == "both"]
-            .drop(columns=["_merge"])
-            .reset_index(drop=True)
-        )
-        WranglerLogger.info(
-            f"Filtered trips from {original_trip_count:,} to {len(feed_dfs['trips']):,}"
-        )
-        WranglerLogger.debug(f"feed_dfs['trips']:\n{feed_dfs['trips']}")
-
-        # filter stop_times for these trip_ids
-        feed_dfs["trips"]["trip_id"] = feed_dfs["trips"]["trip_id"].astype(
-            str
-        )  # make trips.trip_id a string
-        trip_ids = feed_dfs["trips"][["trip_id"]].drop_duplicates().reset_index(drop=True)
-        WranglerLogger.debug(
-            f"After filtering trips to trip_ids (len={len(trip_ids):,}), trip_ids=\n{trip_ids}"
-        )
-
-        feed_dfs["stop_times"]["trip_id"] = feed_dfs["stop_times"]["trip_id"].astype(
-            str
-        )  # make stop_times.trip_id a string
-        feed_dfs["stop_times"] = feed_dfs["stop_times"].merge(
-            right=trip_ids, how="left", indicator=True
-        )
-        WranglerLogger.debug(
-            f"feed_dfs['stop_times']._merge.value_counts():\n{feed_dfs['stop_times']._merge.value_counts()}"
-        )
-        feed_dfs["stop_times"] = (
-            feed_dfs["stop_times"]
-            .loc[feed_dfs["stop_times"]._merge == "both"]
-            .drop(columns=["_merge"])
-            .reset_index(drop=True)
-        )
-        WranglerLogger.debug(f"feed_dfs['stop_times']:\n{feed_dfs['stop_times']}")
-
-        # filter stops for these stop_ids
-        feed_dfs["stop_times"]["stop_id"] = feed_dfs["stop_times"]["stop_id"].astype(
-            str
-        )  # make stop_times.stop_id a string
-        stop_ids = feed_dfs["stop_times"][["stop_id"]].drop_duplicates().reset_index(drop=True)
-        WranglerLogger.debug(f"After filtering stop_times to stop_ids (len={len(stop_ids):,})")
-
-        feed_dfs["stops"]["stop_id"] = feed_dfs["stops"]["stop_id"].astype(
-            str
-        )  # make stops.stop_id a string
-
-        # Save a copy of all stops before filtering
-        all_stops_df = feed_dfs["stops"].copy()
-
-        # First filter to stops referenced in stop_times
-        feed_dfs["stops"] = feed_dfs["stops"].merge(right=stop_ids, how="left", indicator=True)
-        WranglerLogger.debug(
-            f"feed_dfs['stops']._merge.value_counts():\n{feed_dfs['stops']._merge.value_counts()}"
-        )
-        feed_dfs["stops"] = (
-            feed_dfs["stops"]
-            .loc[feed_dfs["stops"]._merge == "both"]
-            .drop(columns=["_merge"])
-            .reset_index(drop=True)
-        )
-
-        # Now check if any of these stops reference parent stations
-        if "parent_station" in feed_dfs["stops"].columns:
-            # Get parent stations that are referenced by kept stops
-            parent_stations = feed_dfs["stops"]["parent_station"].dropna().unique()
-            parent_stations = [ps for ps in parent_stations if ps != ""]  # Remove empty strings
-
-            if len(parent_stations) > 0:
-                WranglerLogger.info(
-                    f"Found {len(parent_stations)} parent stations referenced by kept stops"
-                )
-
-                # Find parent stations that aren't already in our filtered stops
-                existing_stop_ids = set(feed_dfs["stops"]["stop_id"])
-                missing_parent_stations = [
-                    ps for ps in parent_stations if ps not in existing_stop_ids
-                ]
-
-                if len(missing_parent_stations) > 0:
-                    WranglerLogger.debug(
-                        f"Adding back {len(missing_parent_stations)} missing parent stations"
-                    )
-
-                    # Get the parent station records from our saved copy
-                    parent_station_records = all_stops_df[
-                        all_stops_df["stop_id"].isin(missing_parent_stations)
-                    ]
-
-                    # Append parent stations to filtered stops
-                    feed_dfs["stops"] = pd.concat(
-                        [feed_dfs["stops"], parent_station_records], ignore_index=True
-                    )
-
-                    WranglerLogger.debug(
-                        f"After adding parent stations, stops count: {len(feed_dfs['stops']):,}"
-                    )
-
-        # Now check for stop_times with invalid stop_ids after all filtering is complete
-        valid_stop_ids = set(feed_dfs["stops"]["stop_id"])
-        invalid_mask = ~feed_dfs["stop_times"]["stop_id"].isin(valid_stop_ids)
-        invalid_stop_times = feed_dfs["stop_times"][invalid_mask]
-        WranglerLogger.info(
-            f"Found {len(invalid_stop_times):,} stop_times entries with invalid stop_ids after filtering"
-        )
-
-        # This shouldn't happen if the data is valid but leaving the logging in just in case
-        if len(invalid_stop_times) > 0:
-            WranglerLogger.warning(
-                f"Found {len(invalid_stop_times):,} stop_times entries with invalid stop_ids after filtering"
-            )
-
-            # Join with trips to get route_id
-            invalid_with_routes = invalid_stop_times.merge(
-                feed_dfs["trips"][["trip_id", "route_id"]], on="trip_id", how="left"
-            )
-
-            # Log unique invalid stop_ids
-            invalid_stop_ids = invalid_stop_times["stop_id"].unique()
-            WranglerLogger.warning(
-                f"Invalid stop_ids ({len(invalid_stop_ids)} unique): {invalid_stop_ids[:MAX_INVALID_STOPS_DISPLAY].tolist()}..."
-            )
-            if len(invalid_stop_ids) > MAX_INVALID_STOPS_DISPLAY:
-                WranglerLogger.warning(
-                    f"  ... and {len(invalid_stop_ids) - MAX_INVALID_STOPS_DISPLAY} more invalid stop_ids"
-                )
-
-            # Log sample of invalid entries with trip and route context
-            sample_invalid = invalid_with_routes.head(10)
-            WranglerLogger.warning(
-                f"Sample invalid stop_times entries:\n{sample_invalid[['trip_id', 'route_id', 'stop_id', 'stop_sequence']]}"
-            )
-
-            # Log summary by route
-            route_summary = (
-                invalid_with_routes.groupby("route_id")["stop_id"]
-                .agg(["count", "nunique"])
-                .sort_values("count", ascending=False)
-            )
-            route_summary.columns = ["invalid_stop_times_count", "unique_invalid_stops"]
-            WranglerLogger.warning(
-                f"Invalid stop_times by route (top 20):\n{route_summary.head(20)}"
-            )
-
-            # Log full details to debug
-            WranglerLogger.debug(
-                f"All invalid stop_times entries with routes:\n{invalid_with_routes}"
-            )
-
-            # Optionally save to CSV for investigation
-            if Path(feed_path).exists():
-                invalid_csv_path = Path(feed_path).parent / "invalid_stop_times_after_filtering.csv"
-                invalid_with_routes.to_csv(invalid_csv_path, index=False)
-                WranglerLogger.info(f"Saved invalid stop_times to {invalid_csv_path}")
-
-            # Remove invalid entries
-            feed_dfs["stop_times"] = feed_dfs["stop_times"][~invalid_mask].reset_index(drop=True)
-            WranglerLogger.info(f"Removed {len(invalid_stop_times):,} invalid stop_times entries")
-
-    return load_feed_from_dfs(feed_dfs, wrangler_flavored=wrangler_flavored)
+        feed_obj = filter_feed_by_service_ids(feed_obj, service_ids_filter)
+    
+    return feed_obj
 
 
 def _read_table_from_file(table: str, file: Path) -> pd.DataFrame:

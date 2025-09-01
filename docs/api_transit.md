@@ -60,7 +60,13 @@
 
 ## Transit Helper Modules
 
+::: network_wrangler.utils.transit
+    options:
+        heading_level: 3
 ::: network_wrangler.transit.clip
+    options:
+        heading_level: 3
+::: network_wrangler.transit.filter
     options:
         heading_level: 3
 ::: network_wrangler.transit.geo
