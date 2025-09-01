@@ -35,3 +35,9 @@ SMALL_RECS: int = 5
 """Number of records to display in a dataframe summary."""
 
 STRICT_MATCH_FIELDS = ["osm_link_id", "osm_node_id"]
+
+FEET_PER_MILE = 5280.0
+"""Feet to miles conversion constant."""
+
+METERS_PER_KILOMETER = 1000.0
+"""Meters to kilometers conversion constant."""

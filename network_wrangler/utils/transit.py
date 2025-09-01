@@ -28,17 +28,10 @@ from ..models.gtfs.gtfs import (
     STATION_ROUTE_TYPES,
 )
 from ..models.gtfs.types import RouteType
-from ..params import LAT_LON_CRS
+from ..params import FEET_PER_MILE, LAT_LON_CRS, METERS_PER_KILOMETER
 from ..roadway.network import RoadwayNetwork
 from ..transit.feed.feed import Feed
 from .time import time_to_seconds
-
-
-FEET_PER_MILE = 5280.0
-"""Feet to miles conversion constant."""
-
-METERS_PER_KILOMETER = 1000.0
-"""Meters to kilometers conversion constant."""
 
 MAX_DISTANCE_STOP = {
     "feet": 0.25 * FEET_PER_MILE,
