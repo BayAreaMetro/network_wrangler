@@ -510,13 +510,14 @@ class RoadwayNetwork(BaseModel):
             )
             msg = "Cannot add nodes with model_node_id already in network."
             raise NodeAddError(msg)
-        WranglerLogger.debug(f"add_nodes: self.nodes_df.tail()\n{self.nodes_df.tail()}")
-        WranglerLogger.debug(f"add_nodes() add_nodes_df:\n{add_nodes_df}")
-        if add_nodes_df.attrs.get("name") != "road_nodes":
-            add_nodes_df = data_to_nodes_df(add_nodes_df, in_crs=in_crs, config=self.config)
-        WranglerLogger.debug(f"add_nodes() add_nodes_df:\n{add_nodes_df}")
-        concatenated_df = concat_with_attr([self.nodes_df, add_nodes_df], axis=0)
-        self.nodes_df = validate_df_to_model(concatenated_df, RoadNodesTable)
+        WranglerLogger.debug(f"add_nodes(): self.nodes_df.tail()\n{self.nodes_df.tail()}")
+        WranglerLogger.debug(f"add_nodes(): add_nodes_df:\n{add_nodes_df}")
+
+        # this will perform validation to the nodes schema
+        self.nodes_df = data_to_nodes_df(
+            nodes_df = concat_with_attr([self.nodes_df, add_nodes_df], axis=0),
+            in_crs = in_crs
+        )
         # Ensure attrs are preserved after validation
         self.nodes_df.attrs.update(RoadNodesAttrs)
         if self.nodes_df.attrs.get("name") != "road_nodes":
