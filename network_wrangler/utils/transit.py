@@ -415,42 +415,6 @@ def create_feed_frequencies(  # noqa: PLR0915
     WranglerLogger.debug(f"feed_tables['stop_times']:\n{feed_tables['stop_times']}")
 
 
-def build_transit_graph(transit_links_df: pd.DataFrame) -> dict[int, set]:
-    """Build directed adjacency graph from transit links.
-
-    Creates a dictionary-based graph representation where each node maps to a set of
-    directly reachable nodes. The graph is directed, respecting the A->B direction
-    of links. Self-loops are not included by default.
-
-    Args:
-        transit_links_df: DataFrame of transit links with required columns:
-            - A (int): Source node ID
-            - B (int): Target node ID
-
-    Returns:
-        dict[int, set]: Adjacency dictionary where:
-            - Keys are node IDs that appear in the links
-            - Values are sets of node IDs directly reachable from that node
-            - Empty set for nodes with no outgoing edges
-
-    Example:
-        >>> links_df = pd.DataFrame({"A": [1, 2, 3], "B": [2, 3, 1]})
-        >>> graph = build_transit_graph(links_df)
-        >>> graph
-        {1: {2}, 2: {3}, 3: {1}}
-    """
-    graph = {}
-    for _, link in transit_links_df.iterrows():
-        node_a, node_b = link["A"], link["B"]
-        if node_a not in graph:
-            graph[node_a] = set()
-        if node_b not in graph:
-            graph[node_b] = set()
-        # Only add edge from A to B (directed) - no self-loops by default
-        graph[node_a].add(node_b)
-    return graph
-
-
 def match_bus_stops_to_roadway_nodes(  # noqa: PLR0912, PLR0915
     feed_tables: dict[str, pd.DataFrame],
     roadway_net: RoadwayNetwork,
