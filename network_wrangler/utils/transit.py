@@ -1791,10 +1791,12 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
         station_stop_ids_gdf["model_node_id"].isna()
     ].reset_index(drop=False)
     new_station_stop_ids_gdf.drop(columns={"model_node_id"}, inplace=True)
+    new_station_stop_ids_gdf.rename(columns={'stop_id':'stop_id_GTFS'}, inplace=True)
 
     # Assign model_node_id and add new stations to roadway network as roadway nodes
     max_node_num = roadway_net.nodes_df.model_node_id.max()
     new_station_stop_ids_gdf["model_node_id"] = new_station_stop_ids_gdf.index + max_node_num + 1
+    new_station_stop_ids_gdf.drop(columns=['index'], inplace=True)
     WranglerLogger.info(f"Adding {len(new_station_stop_ids_gdf):,} nodes to roadway network")
     WranglerLogger.debug(f"new_station_stop_ids_gdf:\n{new_station_stop_ids_gdf}")
     WranglerLogger.debug(f"Before adding nodes, {len(roadway_net.nodes_df)=:,}")
@@ -1813,8 +1815,8 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
     )
 
     stop_id_to_model_node_id_dict = (
-        new_station_stop_ids_gdf[["stop_id", "model_node_id"]]
-        .set_index("stop_id")
+        new_station_stop_ids_gdf[["stop_id_GTFS", "model_node_id"]]
+        .set_index("stop_id_GTFS")
         .to_dict()["model_node_id"]
     )
     WranglerLogger.debug(f"stop_id_to_model_node_id_dict:\n{stop_id_to_model_node_id_dict}")
@@ -2184,7 +2186,7 @@ def create_feed_from_gtfs_model(  # noqa: PLR0915
     # Getting ready to create Feed object
     # stop_id is now really the model_node_id -- set it
     feed_tables["stops"].rename(
-        columns={"stop_id": "orig_stop_id", "model_node_id": "stop_id"}, inplace=True
+        columns={"stop_id": "stop_id_GTFS", "model_node_id": "stop_id"}, inplace=True
     )
     # But some of the stops are mapped the the same model_node_id (now, stop_id) -- merge them.
     duplicate_stop_ids_df = feed_tables["stops"].loc[
@@ -2192,7 +2194,7 @@ def create_feed_from_gtfs_model(  # noqa: PLR0915
     ]
     WranglerLogger.debug(f"duplicate_stop_ids_df:\n{duplicate_stop_ids_df}")
     WranglerLogger.debug(f"feed_tables['stops'].dtypes:\n{feed_tables['stops'].dtypes}")
-    # orig_stop_id                     object
+    # stop_id_GTFS                     object
     # stop_name                        object
     # stop_lat                        float64
     # stop_lon                        float64
@@ -2215,8 +2217,8 @@ def create_feed_from_gtfs_model(  # noqa: PLR0915
 
     # create full stop_id_to_model_node_id_dict mapping
     stop_id_to_model_node_id_dict = (
-        feed_tables["stops"][["orig_stop_id", "stop_id"]]
-        .set_index("orig_stop_id")
+        feed_tables["stops"][["stop_id_GTFS", "stop_id"]]
+        .set_index("stop_id_GTFS")
         .to_dict()["stop_id"]
     )
     WranglerLogger.debug(f"stop_id_to_model_node_id_dict: {stop_id_to_model_node_id_dict}")
@@ -2245,7 +2247,7 @@ def create_feed_from_gtfs_model(  # noqa: PLR0915
         feed_tables["stops"]
         .groupby(by=["stop_id"])
         .aggregate(
-            orig_stop_id=pd.NamedAgg(column="orig_stop_id", aggfunc=list),
+            stop_id_GTFS=pd.NamedAgg(column="stop_id_GTFS", aggfunc=list),
             stop_name=pd.NamedAgg(column="stop_name", aggfunc=list),
             stop_lat=pd.NamedAgg(column="stop_lat", aggfunc="first"),
             stop_lon=pd.NamedAgg(column="stop_lon", aggfunc="first"),
@@ -2286,8 +2288,8 @@ def create_feed_from_gtfs_model(  # noqa: PLR0915
     feed_tables["stops"]["stop_id"] = feed_tables["stops"]["stop_id"].astype(int)
 
     # Update feed_tables['stop_times']
-    feed_tables["stop_times"].rename(columns={"stop_id": "orig_stop_id"}, inplace=True)
-    feed_tables["stop_times"]["stop_id"] = feed_tables["stop_times"]["orig_stop_id"].map(
+    feed_tables["stop_times"].rename(columns={"stop_id": "stop_id_GTFS"}, inplace=True)
+    feed_tables["stop_times"]["stop_id"] = feed_tables["stop_times"]["stop_id_GTFS"].map(
         stop_id_to_model_node_id_dict
     )
 

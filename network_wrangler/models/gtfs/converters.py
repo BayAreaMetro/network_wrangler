@@ -31,7 +31,7 @@ def convert_stops_to_wrangler_stops(stops_df: pd.DataFrame) -> pd.DataFrame:
 
     Creates table that is unique to each model_node_id.
     Takes first instance of value for all attributes except stop_id.
-    Aggregates stop_id into a comma-separated string and renames to gtfs_stop_id.
+    Aggregates stop_id into a comma-separated string and renames to stop_id_GTFS.
     Renames model_node_id to stop_id.
 
     Example usage:
@@ -56,10 +56,10 @@ def convert_stops_to_wrangler_stops(stops_df: pd.DataFrame) -> pd.DataFrame:
     # if stop_id is an int, convert to string
     if stops_df["stop_id"].dtype == "int64":
         stops_df["stop_id"] = stops_df["stop_id"].astype(str)
-    gtfs_stop_id = (
+    stop_id_GTFS = (
         stops_df.groupby("model_node_id").stop_id.apply(lambda x: ",".join(x)).reset_index()
     )
-    wr_stops_df["gtfs_stop_id"] = gtfs_stop_id["stop_id"]
+    wr_stops_df["stop_id_GTFS"] = stop_id_GTFS["stop_id"]
     wr_stops_df = wr_stops_df.rename(columns={"model_node_id": "stop_id"})
     return wr_stops_df
 
