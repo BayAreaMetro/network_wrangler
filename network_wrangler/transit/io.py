@@ -36,6 +36,7 @@ def load_feed_from_path(  # noqa: PLR0915
     file_format: TransitFileTypes = "txt",
     wrangler_flavored: bool = True,
     service_ids_filter: Optional[list[str]] = None,
+    **read_kwargs,
 ) -> Union[Feed, GtfsModel]:
     """Create a Feed or GtfsModel object from the path to a GTFS transit feed.
 
@@ -45,6 +46,7 @@ def load_feed_from_path(  # noqa: PLR0915
         wrangler_flavored: If True, creates a Wrangler-enhanced Feed object.
                           If False, creates a pure GtfsModel object. Defaults to True.
         service_ids_filter (Optional[list[str]]): If not None, filter to these service_ids. Assumes service_id is a str.
+        **read_kwargs: Additional keyword arguments to pass to the file reader (e.g., low_memory, dtype)
 
     Returns:
         Union[Feed, GtfsModel]: The Feed or GtfsModel object created from the GTFS transit feed.
@@ -82,7 +84,7 @@ def load_feed_from_path(  # noqa: PLR0915
         )
 
     feed_files = {t: f[0] for t, f in feed_possible_files.items()}
-    feed_dfs = {table: _read_table_from_file(table, file) for table, file in feed_files.items()}
+    feed_dfs = {table: _read_table_from_file(table, file, **read_kwargs) for table, file in feed_files.items()}
     
     # Create the feed object first
     feed_obj = load_feed_from_dfs(feed_dfs, wrangler_flavored=wrangler_flavored)
@@ -95,13 +97,23 @@ def load_feed_from_path(  # noqa: PLR0915
     return feed_obj
 
 
-def _read_table_from_file(table: str, file: Path) -> pd.DataFrame:
+def _read_table_from_file(table: str, file: Path, **kwargs) -> pd.DataFrame:
+    """Read a table from a file with support for additional kwargs.
+    
+    Args:
+        table: Name of the table being read (for error messages)
+        file: Path to the file to read
+        **kwargs: Additional keyword arguments to pass to the appropriate reader
+        
+    Returns:
+        pd.DataFrame: The loaded dataframe
+    """
     WranglerLogger.debug(f"...reading {file}.")
     try:
         if file.suffix in [".csv", ".txt"]:
-            return pd.read_csv(file, low_memory=False)
+            return pd.read_csv(file, **kwargs)
         if file.suffix == ".parquet":
-            return pd.read_parquet(file)
+            return pd.read_parquet(file, **kwargs)
     except Exception as e:
         msg = f"Error reading table {table} from file: {file}.\n{e}"
         WranglerLogger.error(msg)
