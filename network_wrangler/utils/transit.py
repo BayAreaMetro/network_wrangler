@@ -2341,6 +2341,10 @@ def filter_transit_by_boundary(  # noqa: PLR0912, PLR0915
         ...         # Other route types not listed will be kept entirely
         ...     },
         ... )
+
+    !!! todo
+        This is similar to [`clip_feed_to_boundary`][network_wrangler.transit.clip.clip_feed_to_boundary] -- consolidate?
+
     """
     WranglerLogger.info("Filtering transit routes by boundary")
 
