@@ -37,7 +37,7 @@ def load_feed_from_path(  # noqa: PLR0915
     feed_path: Union[Path, str],
     file_format: TransitFileTypes = "txt",
     wrangler_flavored: bool = True,
-    service_ids_filter: pd.DataFrame = None,
+    service_ids_filter: Optional[list[str]] = None,
 ) -> Union[Feed, GtfsModel]:
     """Create a Feed or GtfsModel object from the path to a GTFS transit feed.
 
@@ -46,7 +46,7 @@ def load_feed_from_path(  # noqa: PLR0915
         file_format: the format of the files to read. Defaults to "txt"
         wrangler_flavored: If True, creates a Wrangler-enhanced Feed object.
                           If False, creates a pure GtfsModel object. Defaults to True.
-        service_ids_filter (DataFrame): If not None, filter to these service_ids. Assumes service_id is a str.
+        service_ids_filter (Optional[list[str]]): If not None, filter to these service_ids. Assumes service_id is a str.
 
     Returns:
         Union[Feed, GtfsModel]: The Feed or GtfsModel object created from the GTFS transit feed.
@@ -95,8 +95,11 @@ def load_feed_from_path(  # noqa: PLR0915
         feed_dfs["trips"]["service_id"] = feed_dfs["trips"]["service_id"].astype(
             str
         )  # make service_id a string
+        
+        # Create a DataFrame from the list for merging
+        service_ids_df = pd.DataFrame({"service_id": service_ids_filter})
         feed_dfs["trips"] = feed_dfs["trips"].merge(
-            right=service_ids_filter, on="service_id", how="left", indicator=True
+            right=service_ids_df, on="service_id", how="left", indicator=True
         )
         WranglerLogger.debug(
             f"feed_dfs['trips']._merge.value_counts():\n{feed_dfs['trips']._merge.value_counts()}"
