@@ -14,9 +14,55 @@ from .tables import (
     StopTimesTable,
     TripsTable,
 )
+from .types import RouteType
 
 # Constants for display
 MAX_AGENCIES_DISPLAY = 3
+
+# Route type categorizations
+MIXED_TRAFFIC_ROUTE_TYPES = [
+    RouteType.TRAM,
+    RouteType.BUS,
+    RouteType.CABLE_TRAM,
+    RouteType.TROLLEYBUS,
+]
+"""GTFS route types that operate in mixed traffic so stops are nodes that are drive-accessible.
+
+See [GTFS routes.txt](https://gtfs.org/documentation/schedule/reference/#routestxt)
+
+- TRAM = Tram, Streetcar, Light rail, operates in mixed traffic AND at stations
+- CABLE_TRAM = street-level rail with underground cable
+- TROLLEYBUS = electric buses with overhead wires
+"""
+
+STATION_ROUTE_TYPES = [
+    RouteType.TRAM,  # TODO: This is partial...
+    RouteType.SUBWAY,
+    RouteType.RAIL,
+    RouteType.FERRY,
+    RouteType.CABLE_TRAM,  # TODO: This is partial...
+    RouteType.AERIAL_LIFT,
+    RouteType.FUNICULAR,
+    RouteType.MONORAIL,
+]
+"""GTFS route types that operate at stations.
+"""
+
+RAIL_ROUTE_TYPES = [
+    RouteType.TRAM,
+    RouteType.SUBWAY,
+    RouteType.RAIL,
+    RouteType.CABLE_TRAM,
+    RouteType.AERIAL_LIFT,
+    RouteType.FUNICULAR,
+    RouteType.MONORAIL,
+]
+"""GTFS route types which trigger 'rail_only' link creation in add_stations_and_links_to_roadway_network()
+"""
+
+FERRY_ROUTE_TYPES = [RouteType.FERRY]
+"""GTFS route types which trigger 'ferry_only' link creation in add_stations_and_links_to_roadway_network()
+"""
 
 
 class GtfsValidationError(Exception):

@@ -20,56 +20,18 @@ from ..models.gtfs.converters import (
     convert_stop_times_to_wrangler_stop_times,
     convert_stops_to_wrangler_stops,
 )
-from ..models.gtfs.gtfs import GtfsModel
+from ..models.gtfs.gtfs import (
+    FERRY_ROUTE_TYPES,
+    GtfsModel,
+    MIXED_TRAFFIC_ROUTE_TYPES,
+    RAIL_ROUTE_TYPES,
+    STATION_ROUTE_TYPES,
+)
 from ..models.gtfs.types import RouteType
 from ..params import LAT_LON_CRS
 from ..roadway.network import RoadwayNetwork
 from ..transit.feed.feed import Feed
 from .time import time_to_seconds
-
-MIXED_TRAFFIC_ROUTE_TYPES = [
-    RouteType.TRAM,
-    RouteType.BUS,
-    RouteType.CABLE_TRAM,
-    RouteType.TROLLEYBUS,
-]
-"""GTFS route types that operate in mixed traffic so stops are nodes that are drive-accessible.
-
-See [GTFS routes.txt](https://gtfs.org/documentation/schedule/reference/#routestxt)
-
-- TRAM = Tram, Streetcar, Light rail, operates in mixed traffic AND at stations
-- CABLE_TRAM = street-level rail with underground cable
-- TROLLEYBUS = electric buses with overhead wires
-"""
-
-STATION_ROUTE_TYPES = [
-    RouteType.TRAM,  # TODO: This is partial...
-    RouteType.SUBWAY,
-    RouteType.RAIL,
-    RouteType.FERRY,
-    RouteType.CABLE_TRAM,  # TODO: This is partial...
-    RouteType.AERIAL_LIFT,
-    RouteType.FUNICULAR,
-    RouteType.MONORAIL,
-]
-"""GTFS route types that operate at stations.
-"""
-
-RAIL_ROUTE_TYPES = [
-    RouteType.TRAM,
-    RouteType.SUBWAY,
-    RouteType.RAIL,
-    RouteType.CABLE_TRAM,
-    RouteType.AERIAL_LIFT,
-    RouteType.FUNICULAR,
-    RouteType.MONORAIL,
-]
-"""GTFS route types which trigger 'rail_only' link creation in add_stations_and_links_to_roadway_network()
-"""
-
-FERRY_ROUTE_TYPES = [RouteType.FERRY]
-"""GTFS route types which trigger 'ferry_only' link creation in add_stations_and_links_to_roadway_network()
-"""
 
 
 FEET_PER_MILE = 5280.0
