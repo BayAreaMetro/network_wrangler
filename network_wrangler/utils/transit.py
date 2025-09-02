@@ -1475,6 +1475,13 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
             on="route_id",
             validate="many_to_one",
         )
+    # keep trace_stop_id_set
+    trace_stop_id_set = None
+    if trace_shape_ids:
+        trace_stop_id_set = set(feed_tables["stop_times"].loc[ 
+            feed_tables["stop_times"]["shape_id"].isin(trace_shape_ids), "stop_id"
+        ].to_list())
+        WranglerLogger.debug(f"trace_stop_id_set:{trace_stop_id_set}")
 
     # Prepare new link list first
     # For all consecutive stop_ids in feed_table['stop_times'], create consecutive node pairs for each shape
@@ -1677,9 +1684,11 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
     )
 
     if trace_shape_ids:
-        WranglerLogger.debug(
-            f"trace station_stop_links_gdf:\n{station_stop_links_gdf.loc[station_stop_links_gdf.shape_id.isin(trace_shape_ids)]}"
-        )
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace station_stop_links_gdf for {trace_shape_id}:\n"
+                f"{station_stop_links_gdf.loc[station_stop_links_gdf.shape_id.isin(trace_shape_ids)]}"
+            )
 
     # Prepare nodes to add - station stops and parent stops
     station_stop_ids_gdf = (
@@ -1703,6 +1712,11 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
     station_stop_ids_gdf.rename(columns={"stop_lon": "X", "stop_lat": "Y"}, inplace=True)
     station_stop_ids_gdf.to_crs(LAT_LON_CRS, inplace=True)
     WranglerLogger.debug(f"station_stop_ids_gdf:\n{station_stop_ids_gdf}")
+    if trace_stop_id_set:
+        WranglerLogger.debug(
+            f"trace station_stop_ids_gdf for trace_stop_id_set:\n"
+            f"{station_stop_ids_gdf.loc[ station_stop_ids_gdf['stop_id'].isin(trace_stop_id_set)]}"
+        )
 
     # Don't create new stations where one already exists! (stops that serve both bus and light rail)
     # => Filter to station ONLY
@@ -1733,11 +1747,19 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
         f"station_stop_ids_gdf with bus and new station stops:\n{station_stop_ids_gdf}"
     )
 
-    stop_id_to_model_node_id_dict = (
-        new_station_stop_ids_gdf[["stop_id_GTFS", "model_node_id"]]
+    # get stop_id -> model_node_id for new nodes and stations that mapped to roadway nodes
+    # (e.g. for LRT that have road node stations)
+    new_stop_id_to_model_node_id_dict = (
+         new_station_stop_ids_gdf[["stop_id_GTFS", "model_node_id"]]
         .set_index("stop_id_GTFS")
         .to_dict()["model_node_id"]
     )
+    stop_id_to_model_node_id_dict = (
+        station_stop_ids_gdf[["stop_id", "model_node_id"]]
+        .set_index("stop_id")
+        .to_dict()["model_node_id"]
+    )
+    stop_id_to_model_node_id_dict.update(new_stop_id_to_model_node_id_dict)
     WranglerLogger.debug(f"stop_id_to_model_node_id_dict:\n{stop_id_to_model_node_id_dict}")
 
     # Prepare links to add
@@ -1757,6 +1779,7 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
             "B",
             "next_stop_id",
             "next_stop_name",
+            "shape_id",
             "geometry",
         ]
     ]
@@ -1779,10 +1802,23 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
             geometry=pd.NamedAgg(column="geometry", aggfunc="first"),
             rail_only=pd.NamedAgg(column="rail_only", aggfunc=any),
             ferry_only=pd.NamedAgg(column="ferry_only", aggfunc=any),
+            shape_ids=pd.NamedAgg(column="shape_id", aggfunc=list),
         )
         .reset_index(drop=False),
         crs=station_stop_links_gdf.crs,
     )
+    station_road_links_gdf["A"] = station_road_links_gdf["A"].astype(int)
+    station_road_links_gdf["B"] = station_road_links_gdf["B"].astype(int)
+
+    # drop links that are already in roadway network - this may happen for LRT links on roadways
+    station_road_links_gdf = station_road_links_gdf.merge(
+        right=roadway_net.links_df[["A","B"]],
+        how="left",
+        validate="one_to_one",
+        indicator=True
+    )
+    station_road_links_gdf = station_road_links_gdf.loc[ station_road_links_gdf["_merge"] == "left_only"]
+    station_road_links_gdf.drop(columns={"_merge"}, inplace=True)
 
     # Assign model_link_id, access for drive,walk,bike,truck,bus
     max_model_link_id = roadway_net.links_df.model_link_id.max()
@@ -1816,6 +1852,14 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
     # Add to roadway network
     WranglerLogger.info(f"Adding {len(station_road_links_gdf):,} links to roadway network")
     WranglerLogger.debug(f"station_road_links_gdf:\n{station_road_links_gdf}")
+
+    if trace_shape_ids:
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace station_road_links_gdf for {trace_shape_id}:\n"
+                f"{station_road_links_gdf.loc[station_road_links_gdf['shape_ids'].apply(lambda x, tid=trace_shape_id: isinstance(x, list) and tid in x)]}"
+            )
+
     WranglerLogger.debug(f"Before adding links, {len(roadway_net.links_df)=:,}")
     roadway_net.add_links(station_road_links_gdf)
     WranglerLogger.debug(f"After adding links, {len(roadway_net.links_df)=:,}")
@@ -1843,6 +1887,7 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
     have_both_df = feed_tables["stops"].loc[
         feed_tables["stops"]["model_node_id"].notna()
         & feed_tables["stops"]["station_node_id"].notna()
+        & (feed_tables["stops"]["model_node_id"] != feed_tables["stops"]["station_node_id"])
     ]
     assert len(have_both_df) == 0
 
@@ -1881,6 +1926,7 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
     have_both_df = feed_tables["shapes"].loc[
         feed_tables["shapes"]["shape_model_node_id"].notna()
         & feed_tables["shapes"]["station_node_id"].notna()
+        & (feed_tables["shapes"]["shape_model_node_id"] != feed_tables["shapes"]["station_node_id"])
     ]
     assert len(have_both_df) == 0
     feed_tables["shapes"].loc[
