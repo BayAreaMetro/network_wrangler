@@ -807,9 +807,11 @@ def create_bus_routes(  # noqa: PLR0912, PLR0915
     )
     WranglerLogger.debug(f"bus_stop_links_gdf:\n{bus_stop_links_gdf}")
     if trace_shape_ids:
-        WranglerLogger.debug(
-            f"trace bus_stop_links_gdf:\n{bus_stop_links_gdf.loc[bus_stop_links_gdf.shape_id.isin(trace_shape_ids)]}"
-        )
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace bus_stop_links_gdf for {trace_shape_id}:\n"
+                f"{bus_stop_links_gdf.loc[bus_stop_links_gdf.shape_id==trace_shape_id]}"
+            )
 
     # Create a shortest path through the bus network between each consecutive bus stop for a given shape_id,
     # traversing through intermediate roadway nodes
@@ -836,10 +838,14 @@ def create_bus_routes(  # noqa: PLR0912, PLR0915
         try:
             # Try to find shortest path
             path = nx.shortest_path(G_bus, row["A"], row["B"])
-            path_length = len(path) - 1  # Number of edges
             # WranglerLogger.debug(f"Found path for {row['A']} to {row['B']}: len={path_length} {path}")
 
             # Create shape point rows for that path
+            # Only include first point if it's the first path for the shape,
+            # otherwise it'll be added twice -- as the last point of the previous path
+            # and the first point of the current one
+            if current_shape_pt_sequence != 1:
+                path = path[1:]
             for path_node_id in path:
                 bus_node_dict = {
                     "shape_id": row["shape_id"],
@@ -881,6 +887,12 @@ def create_bus_routes(  # noqa: PLR0912, PLR0915
 
     bus_node_sequence_df = pd.DataFrame(bus_node_sequence)
     WranglerLogger.debug(f"bus_node_sequence_df:\n{bus_node_sequence_df}")
+    if trace_shape_ids:
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace bus_node_sequence_df for {trace_shape_id}:\n"
+                f"{bus_node_sequence_df.loc[bus_node_sequence_df.shape_id==trace_shape_id]}"
+            )
 
     if len(no_path_sequence) == 0:
         WranglerLogger.info(f"All bus route shapes mapped to roadway nodes")
@@ -1817,6 +1829,12 @@ def add_stations_and_links_to_roadway_network(  # noqa: PLR0912, PLR0915
         validate="one_to_one",
         indicator=True
     )
+    if trace_shape_ids:
+        for trace_shape_id in trace_shape_ids:
+            WranglerLogger.debug(
+                f"trace station_road_links_gdf including check for roadway_net.links_df for {trace_shape_id}:\n"
+                f"{station_road_links_gdf.loc[station_road_links_gdf['shape_ids'].apply(lambda x, tid=trace_shape_id: isinstance(x, list) and tid in x)]}"
+            )    
     station_road_links_gdf = station_road_links_gdf.loc[ station_road_links_gdf["_merge"] == "left_only"]
     station_road_links_gdf.drop(columns={"_merge"}, inplace=True)
 
