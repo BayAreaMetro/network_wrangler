@@ -260,7 +260,7 @@ class RoadLinksTable(DataFrameModel):
     ML_projects: Series[str] = Field(coerce=True, default="")
     ML_lanes: Optional[Series[Int64]] = Field(coerce=True, nullable=True, default=None)
     ML_price: Optional[Series[float]] = Field(coerce=True, nullable=True, default=0)
-    ML_access: Optional[Series[Any]] = Field(coerce=True, nullable=True, default=True)
+    ML_access: Optional[Series[Any]] = Field(coerce=True, nullable=True, default=None)
     ML_access_point: Optional[Series[bool]] = Field(
         coerce=True,
         default=False,
