@@ -30,6 +30,8 @@ MODES_TO_NETWORK_LINK_VARIABLES: dict[str, list[str]] = {
     "walk": ["walk_access"],
     "bike": ["bike_access"],
 }
+"""Used by [`filter_links_to_modes`][network_wrangler.roadway.links.filters.filter_links_to_modes]
+"""
 
 SMALL_RECS: int = 5
 """Number of records to display in a dataframe summary."""

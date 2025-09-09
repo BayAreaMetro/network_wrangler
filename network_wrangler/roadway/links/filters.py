@@ -120,7 +120,8 @@ def filter_links_to_modes(
 
     Args:
         links_df (RoadLinksTable): links dataframe
-        modes (List[str]): list of modes to filter by.
+        modes (List[str]): list of modes to filter by, where modes are keys 
+            in [`MODES_TO_NETWORK_LINK_VARIABLES`][network_wrangler.params.MODES_TO_NETWORK_LINK_VARIABLES]
 
     Returns:
         RoadLinksTable: filtered links dataframe
