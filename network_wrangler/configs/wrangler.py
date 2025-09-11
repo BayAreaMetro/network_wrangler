@@ -101,6 +101,7 @@ Extended usage:
 
 """
 
+from dataclasses import field
 from typing import Literal
 
 from pydantic import Field
@@ -218,10 +219,10 @@ class WranglerConfig(ConfigItem):
         EDITS: Parameters governing how edits are handled.
     """
 
-    IDS: IdGenerationConfig = IdGenerationConfig()
-    MODEL_ROADWAY: ModelRoadwayConfig = ModelRoadwayConfig()
-    CPU: CpuConfig = CpuConfig()
-    EDITS: EditsConfig = EditsConfig()
+    IDS: IdGenerationConfig = field(default_factory=IdGenerationConfig)
+    MODEL_ROADWAY: ModelRoadwayConfig = field(default_factory=ModelRoadwayConfig)
+    CPU: CpuConfig = field(default_factory=CpuConfig)
+    EDITS: EditsConfig = field(default_factory=EditsConfig)
 
 
 DefaultConfig = WranglerConfig()
