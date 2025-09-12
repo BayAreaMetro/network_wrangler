@@ -535,11 +535,12 @@ class RoadwayNetwork(BaseModel):
             add_shapes_df: Dataframe of additional shapes to add.
             in_crs: crs of input data. Defaults to LAT_LON_CRS.
         """
-        dupe_ids = self.shapes_df["shape_id"].isin(add_shapes_df["shape_id"])
-        if dupe_ids.any():
-            msg = "Cannot add shapes with shape_id already in network."
-            WranglerLogger.error(msg + f"\nDuplicates: {dupe_ids}")
-            raise ShapeAddError(msg)
+        if len(self.shapes_df) > 0:
+            dupe_ids = self.shapes_df["shape_id"].isin(add_shapes_df["shape_id"])
+            if dupe_ids.any():
+                msg = "Cannot add shapes with shape_id already in network."
+                WranglerLogger.error(msg + f"\nDuplicates: {dupe_ids}")
+                raise ShapeAddError(msg)
 
         if add_shapes_df.attrs.get("name") != "road_shapes":
             add_shapes_df = df_to_shapes_df(add_shapes_df, in_crs=in_crs, config=self.config)
