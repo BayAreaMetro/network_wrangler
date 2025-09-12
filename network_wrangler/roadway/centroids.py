@@ -370,6 +370,7 @@ def add_centroid_connectors(
 
     max_model_link_id = road_net.links_df.model_link_id.max()
     centroid_links_df["model_link_id"] = centroid_links_df.index + max_model_link_id + 1
+    centroid_links_df["shape_id"] = "sh" + centroid_links_df["model_link_id"].astype("str")
     centroid_links_df["name"] = f"{zone_id} connector"
     # default to False
     link_mode_variables = set()
@@ -391,6 +392,7 @@ def add_centroid_connectors(
         centroid_links_df[colname] = default_value
 
     road_net.add_links(centroid_links_df)
+    road_net.add_shapes(centroid_links_df)
     WranglerLogger.info("Added centroid connectors to roadway network")
 
     # summarize number of connectors per zone
