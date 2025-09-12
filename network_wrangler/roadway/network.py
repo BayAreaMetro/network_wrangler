@@ -529,7 +529,7 @@ class RoadwayNetwork(BaseModel):
         add_shapes_df: pd.DataFrame,
         in_crs: int = LAT_LON_CRS,
     ):
-        """Validate combined shapes_df with RoadShapesTable efore adding to self.shapes_df.
+        """Validate combined shapes_df with RoadShapesTable before adding to self.shapes_df.
 
         Args:
             add_shapes_df: Dataframe of additional shapes to add.
