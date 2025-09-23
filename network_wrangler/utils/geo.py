@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import copy
 import math
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import pyarrow as pa
 from geographiclib.geodesic import Geodesic
@@ -24,6 +26,26 @@ from .data import update_df_by_col_value
 
 if TYPE_CHECKING:
     from ..roadway.network import RoadwayNetwork
+
+
+class CardinalDirection(str, Enum):
+    """Cardinal directions."""
+    N = "N"
+    E = "E"
+    S = "S"
+    W = "W"
+
+
+class IntercardinalDirection(str, Enum):
+    """Cardinal and intercardinal directions."""
+    N = "N"
+    NE = "NE"
+    E = "E"
+    SE = "SE"
+    S = "S"
+    SW = "SW"
+    W = "W"
+    NW = "NW"
 
 # key:value (from espg, to espg): pyproj transform object
 transformers = {}
@@ -596,3 +618,104 @@ def update_point_geometry(
         fail_if_missing=False,
     )
     return updated_df
+
+
+def get_link_bearing_degrees(geometry) -> float:
+    """Calculate bearing in degrees from start to end of a line geometry.
+
+    Args:
+        geometry: Shapely LineString or MultiLineString geometry
+
+    Returns:
+        Bearing in degrees (0-360, where 0=North), or NaN if invalid geometry
+    """
+    if geometry is None or geometry.is_empty:
+        return np.nan
+
+    # Get first and last coordinates
+    coords = list(geometry.coords)
+    if len(coords) < 2:
+        return np.nan
+
+    lon1, lat1 = coords[0]
+    lon2, lat2 = coords[-1]
+
+    # Use the existing get_bearing function (returns radians)
+    bearing_rad = get_bearing(lat1, lon1, lat2, lon2)
+
+    # Convert to degrees and normalize to 0-360
+    bearing_deg = math.degrees(bearing_rad)
+    bearing_deg = (bearing_deg + 360) % 360
+
+    return bearing_deg
+
+
+def bearing_to_cardinal_direction(bearing: float, cardinal_only: bool = False) -> Optional[str]:
+    """Convert bearing in degrees to cardinal or intercardinal direction.
+
+    Args:
+        bearing: Bearing in degrees (0-360, where 0=North)
+        cardinal_only: If True, returns only N/E/S/W. If False, includes NE/SE/SW/NW
+
+    Returns:
+        Direction string or None if bearing is NaN
+    """
+    if np.isnan(bearing):
+        return None
+
+    if cardinal_only:
+        # 4 directions (N, E, S, W)
+        directions = [CardinalDirection.N, CardinalDirection.E,
+                      CardinalDirection.S, CardinalDirection.W]
+        # Each sector is 90 degrees, offset by 45 degrees
+        sector = int(((bearing + 45) % 360) / 90)
+        return directions[sector].value
+    else:
+        # 8 directions (N, NE, E, SE, S, SW, W, NW)
+        directions = [
+            IntercardinalDirection.N, IntercardinalDirection.NE,
+            IntercardinalDirection.E, IntercardinalDirection.SE,
+            IntercardinalDirection.S, IntercardinalDirection.SW,
+            IntercardinalDirection.W, IntercardinalDirection.NW
+        ]
+        # Each sector is 45 degrees, offset by 22.5 degrees
+        sector = int(((bearing + 22.5) % 360) / 45)
+        return directions[sector].value
+
+
+def add_direction_to_links(
+    links_df: pd.DataFrame,
+    cardinal_only: bool = False
+) -> pd.DataFrame:
+    """Add cardinal direction column to links based on their geometry.
+
+    Calculates the bearing/azimuth of each link from start to end point and assigns
+    cardinal directions.
+
+    Args:
+        links_df: DataFrame of road links with geometry column
+        cardinal_only: If True, returns only cardinal directions (N/E/S/W).
+                      If False (default), includes intercardinal (NE/SE/SW/NW).
+
+    Returns:
+        DataFrame with added 'direction' column
+
+    Example:
+        >>> links_df = add_direction_to_links(links_df)
+        >>> # Link going northeast would have direction='NE'
+        >>>
+        >>> links_df = add_direction_to_links(links_df, cardinal_only=True)
+        >>> # Same link would have direction='N' or 'E' depending on angle
+    """
+    # Make a copy to avoid modifying the original
+    result_df = links_df.copy()
+
+    # Calculate bearings for all links
+    bearings = result_df['geometry'].apply(get_link_bearing_degrees)
+
+    # Convert bearings to directions
+    result_df['direction'] = bearings.apply(
+        lambda b: bearing_to_cardinal_direction(b, cardinal_only=cardinal_only)
+    )
+
+    return result_df
