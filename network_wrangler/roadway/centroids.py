@@ -155,7 +155,7 @@ def add_centroid_connectors(
     Centroid Connector Link Attributes:
         - **model_link_id**: Auto-incremented from max existing link ID
         - **A, B**: Origin and destination node IDs (bidirectional, so both directions created)
-        - **name**: Set to "{zone_id} connector"
+        - **name**: Set to "node to {zone_id}" or "{zone_id} to node"
         - **length**: Euclidean distance between centroid and node (in local_crs units)
         - **geometry**: LineString from origin to destination
         - **highway**: Set to zone_id value (if highway column exists in network)
@@ -346,6 +346,7 @@ def add_centroid_connectors(
     # create centroid connector links: zone to node
     links_taz_to_node_df = mode_node_df.copy()
     links_taz_to_node_df.rename(columns={zone_id:"A", "model_node_id":"B", "distance_from_centroid":"length"}, inplace=True)
+    links_taz_to_node_df["name"] = f"{zone_id} to node"
     links_taz_to_node_df["geometry"] = links_taz_to_node_df.apply(
         lambda row:
         shapely.geometry.LineString([row["geometry_centroid"], row["geometry"]]),
@@ -354,6 +355,7 @@ def add_centroid_connectors(
     # create centroid connector links: node to zone
     links_node_to_taz_df = mode_node_df.copy()
     links_node_to_taz_df.rename(columns={"model_node_id":"A", zone_id:"B", "distance_from_centroid":"length"}, inplace=True)
+    links_node_to_taz_df["name"] = f"node to {zone_id}"
     links_node_to_taz_df["geometry"] = links_node_to_taz_df.apply(
         lambda row:
         shapely.geometry.LineString([row["geometry"], row["geometry_centroid"]]),
@@ -365,13 +367,12 @@ def add_centroid_connectors(
     centroid_links_df.reset_index(drop=False, inplace=True)
     
     # select minimal columns
-    centroid_links_df = centroid_links_df[["A","B","length","geometry"]]
+    centroid_links_df = centroid_links_df[["A","B","name","length","geometry"]]
     WranglerLogger.debug(f"centroid_links_df:\n{centroid_links_df}")
 
     max_model_link_id = road_net.links_df.model_link_id.max()
     centroid_links_df["model_link_id"] = centroid_links_df.index + max_model_link_id + 1
     centroid_links_df["shape_id"] = "sh" + centroid_links_df["model_link_id"].astype("str")
-    centroid_links_df["name"] = f"{zone_id} connector"
     # default to False
     link_mode_variables = set()
     for _mode, link_vars in MODES_TO_NETWORK_LINK_VARIABLES.items():
