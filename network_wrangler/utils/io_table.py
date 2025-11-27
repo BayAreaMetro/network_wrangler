@@ -104,6 +104,13 @@ def _convert_dict_to_scoped_pydantic(val):
     """Convert dictionaries back to ScopedLinkValueItem Pydantic models."""
     from ..models.roadway.types import ScopedLinkValueItem
 
+    # Handle JSON strings that need to be parsed first
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except (json.JSONDecodeError, TypeError):
+            return val
+
     if isinstance(val, dict):
         return ScopedLinkValueItem(**val)
     elif isinstance(val, list):
@@ -126,13 +133,17 @@ def _restore_scoped_pydantic_models(df: Union[pd.DataFrame, gpd.GeoDataFrame]) -
     scoped_cols = [col for col in df.columns if col.startswith('sc_')]
 
     for col in scoped_cols:
-        # Check if column has dict values that need conversion
+        # Check if column has dict, list, or JSON string values that need conversion
         needs_conversion = False
         for val in df[col].dropna():
             if isinstance(val, dict):
                 needs_conversion = True
                 break
             if isinstance(val, list) and len(val) > 0 and isinstance(val[0], dict):
+                needs_conversion = True
+                break
+            # Also check for JSON strings (common when reading from GeoJSON)
+            if isinstance(val, str) and val.startswith('[') and val.endswith(']'):
                 needs_conversion = True
                 break
         if needs_conversion:
