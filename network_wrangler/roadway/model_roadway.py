@@ -45,6 +45,7 @@ COPY_FROM_GP_TO_ML: list[str] = [
     "walk_access",
     "bus_only",
     "rail_only",
+    "ferry_only"
 ]
 
 """
@@ -148,6 +149,21 @@ class ModelRoadwayNetwork:
                 self.net, self.ml_link_id_lookup, self.ml_node_id_lookup
             )
         self._net_hash = copy.deepcopy(net.network_hash)
+
+    def __str__(self):
+        """Return string representation of RoadwayNetwork.
+
+        Returns:
+            str: Summary string showing network statistics and dataframe contents.
+        """
+        my_str = f"ModelRoadwayNetwork:"
+        my_str += f"\nlinks_df:\n{self.links_df}"
+        my_str += f"\nlinks_df.dtypes:\n{self.links_df.dtypes}"
+        my_str += f"\nnodes_df:\n{self.nodes_df}"
+        my_str += f"\nnodes_df:\n{self.nodes_df.dtypes}"
+        my_str += f"\nml_link_id_lookup:\n{self.ml_link_id_lookup}"
+        my_str += f"\ml_node_id_lookup:\n{self.ml_node_id_lookup }"
+        return my_str
 
     @property
     def ml_config(self) -> dict:
