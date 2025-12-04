@@ -181,6 +181,8 @@ class RoadwayNetwork(BaseModel):
         my_str = f"RoadwayNetwork(nodes={len(self.nodes_df)}, links={len(self.links_df)})"
         my_str += f"\nnodes_df (type={type(self.nodes_df)}):\n{self.nodes_df}"
         my_str += f"\nlinks_df (type={type(self.links_df)}):\n{self.links_df}"
+        my_str += f"\nshapes_df (type={type(self.shapes_df)}):\n{self.shapes_df}"
+        my_str += f"\ncrs={self.shapes_df.crs}"
         return my_str
 
     @field_validator("config")
