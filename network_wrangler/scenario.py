@@ -898,9 +898,12 @@ def load_scenario(
         scenario_data: Scenario data as a dict or path to scenario data file
         name: Optional name for the scenario. Defaults to current datetime.
     """
+    scenario_name = name
     if not isinstance(scenario_data, dict):
         WranglerLogger.debug(f"Loading Scenario from file: {scenario_data}")
         scenario_data = load_dict(scenario_data)
+        # use version in file if it exists
+        scenario_name = scenario_data.get("name", scenario_name)
     else:
         WranglerLogger.debug("Loading Scenario from dict.")
 
@@ -914,7 +917,7 @@ def load_scenario(
         base_scenario_data, config=scenario_data["config"]
     )
     my_scenario = create_scenario(
-        base_scenario=base_scenario, name=name, config=scenario_data["config"]
+        base_scenario=base_scenario, name=scenario_name, config=scenario_data["config"]
     )
     return my_scenario
 
