@@ -378,7 +378,7 @@ class Scenario:
     def __str__(self):
         """String representation of the Scenario object."""
         s = [f"{key}: {value}" for key, value in self.__dict__.items()]
-        return "\n".join(s)
+        return f"scenario name=[{self.name}]\n" + "\n".join(s)
 
     def _add_dependencies(self, project_name, dependencies: dict) -> None:
         """Add dependencies from a project card to relevant scenario variables.
