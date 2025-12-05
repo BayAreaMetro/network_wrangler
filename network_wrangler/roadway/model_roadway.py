@@ -510,7 +510,9 @@ def _create_ml_nodes_from_links(
     b_nodes_df = _create_nodes_from_link(ml_links_df.of_type.managed, -1, "B")
     ml_nodes_df = a_nodes_df.combine_first(b_nodes_df)
 
-    ml_nodes_df["GP_model_node_id"] = ml_nodes_df["model_node_id"].map(ml_node_id_lookup)
+    # ml_node_id_lookup maps GP to ML node, we want the reverse
+    reverse_ml_node_id_lookup = {value: key for key,value in ml_node_id_lookup.items()}
+    ml_nodes_df["GP_model_node_id"] = ml_nodes_df["model_node_id"].map(reverse_ml_node_id_lookup)
     return ml_nodes_df
 
 
