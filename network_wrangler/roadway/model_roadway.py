@@ -162,7 +162,7 @@ class ModelRoadwayNetwork:
         my_str += f"\nnodes_df:\n{self.nodes_df}"
         my_str += f"\nnodes_df:\n{self.nodes_df.dtypes}"
         my_str += f"\nml_link_id_lookup:\n{self.ml_link_id_lookup}"
-        my_str += f"\ml_node_id_lookup:\n{self.ml_node_id_lookup }"
+        my_str += f"\nml_node_id_lookup:\n{self.ml_node_id_lookup }"
         return my_str
 
     @property
