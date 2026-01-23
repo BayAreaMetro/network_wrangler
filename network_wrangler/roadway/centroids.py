@@ -24,6 +24,7 @@ class FitForCentroidConnection(IntEnum):
 
     Used by add_centroid_connectors().
     """
+    NA_IS_CONNECTOR = 0
     BEST = 1
     GOOD = 2
     OKAY = 3
@@ -85,7 +86,8 @@ def calculate_angle_from_centroid(
 def add_centroid_nodes(
     road_net: RoadwayNetwork,
     zones_gdf: gpd.GeoDataFrame,
-    zone_id: str
+    zone_id: str,
+    default_node_attribute_dict: Optional[dict[str, any]] = None
 ):
     """Adds the given centroid nodes to the roadway network.
 
@@ -96,6 +98,8 @@ def add_centroid_nodes(
             which should contain the centroid point location
         zone_id: the zone id field in zones_gdf; this will be used as the
             model_node_id
+        default_node_attribute_dict: node attributes to set for the new centroid nodes.
+            Defaults to None.
     """
     centroid_nodes_gdf = (
         zones_gdf[[zone_id, 'geometry_centroid']].
@@ -105,6 +109,12 @@ def add_centroid_nodes(
     centroid_nodes_gdf['X'] = centroid_nodes_gdf['geometry'].x
     centroid_nodes_gdf['Y'] = centroid_nodes_gdf['geometry'].y
     centroid_nodes_gdf['osm_node_id'] = f"{zone_id}:" + centroid_nodes_gdf['model_node_id'].astype(str)
+
+    # set default node attributes
+    if default_node_attribute_dict is None:
+        default_node_attribute_dict = {}
+    for colname, default_value in default_node_attribute_dict.items():
+        centroid_nodes_gdf[colname] = default_value
 
     # assume the model_node_id
     len_road_net_nodes = len(road_net.nodes_df)
@@ -125,7 +135,7 @@ def add_centroid_connectors(
     zone_buffer_distance: int,
     num_centroid_connectors: int,
     max_mode_graph_degrees: int,
-    default_link_attribute_dict: dict[str, any]
+    default_link_attribute_dict: Optional[dict[str, any]] = None
 ):
     """Creates centroid connector links between zone centroids and roadway network nodes.
 
@@ -180,7 +190,8 @@ def add_centroid_connectors(
             This should be in the units of the local_crs.
         num_centroid_connectors: maximum number of centroid connectors per zone
         max_mode_graph_degrees: maximum outgoing degree for a node to be eligible
-        default_link_attribute_dict: link attributes to set for the new centroid connector links
+        default_link_attribute_dict: link attributes to set for the new centroid connector links.
+            Defaults to None.
 
     Returns: 
         A geopandas.GeoDataFrame that's a copy of zones_gdf but with an additional column, `num_connectors`.
@@ -389,6 +400,8 @@ def add_centroid_connectors(
         centroid_links_df["highway"] = zone_id
 
     # set default link attributes
+    if default_link_attribute_dict is None:
+        default_link_attribute_dict = {}
     for colname,default_value in default_link_attribute_dict.items():
         centroid_links_df[colname] = default_value
 
