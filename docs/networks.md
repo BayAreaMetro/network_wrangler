@@ -131,7 +131,8 @@ All properties preceded by `ML_` will be copied, without that prefix, to the man
 The following are controlled by parameters which can be set using WranglerConfig:
 
 Geometry of managed lanes will be defined as a shape offset by the parameter `ML_OFFSET_METERS`.
-Properties defined in the parameter `ADDITIONAL_COPY_FROM_GP_TO_ML` are also copied from the parent link.
+Link properties defined in the parameter `ADDITIONAL_COPY_FROM_GP_LINK_TO_ML` are also copied from the parent link.
+Node properties defined in the parameter `ADDITIONAL_COPY_FROM_GP_NODE_TO_ML` are copied from the general purpose nodes to the managed lane nodes.
 
 New `model_node_id` s and `model_link_ids` are generated based either on ranges or using a scalar from the GP link based on: `ML_LINK_ID_METHOD`, `ML_NODE_ID_METHOD`, `ML_LINK_ID_RANGE`, `ML_NODE_ID_RANGE`, `ML_LINK_ID_SCALAR`, `ML_NODE_ID_SCALAR`
 
