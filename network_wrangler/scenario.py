@@ -474,7 +474,7 @@ class Scenario:
         """Checks all requirements are satisified to apply this specific set of projects.
 
         Including:
-        1. has an associaed project card
+        1. has an associated project card
         2. is in scenario's planned projects
         3. pre-requisites satisfied
         4. co-requisies satisfied by applied or co-applied projects

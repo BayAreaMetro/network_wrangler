@@ -14,8 +14,8 @@ import pandas as pd
 import pyarrow as pa
 from geographiclib.geodesic import Geodesic
 from pyproj import CRS, Proj, Transformer
-from shapely.geometry import LineString, Point
-from shapely.ops import transform
+from shapely.geometry import LineString, MultiLineString, Point
+from shapely.ops import linemerge, transform
 
 from ..errors import MissingNodesError
 from ..logger import WranglerLogger
@@ -502,6 +502,11 @@ def offset_geometry_meters(geo_s: gpd.GeoSeries, offset_distance_meters: float) 
     meters_crs = _id_utm_crs(geo_s)
     geo_s = geo_s.to_crs(meters_crs)
     offset_geo = geo_s.apply(lambda x: x.offset_curve(offset_distance_meters))
+    # offset_curve can produce MultiLineString for links with sharp bends/kinks;
+    # merge them back into LineString so downstream code can access .coords
+    offset_geo = offset_geo.apply(
+        lambda g: linemerge(g) if isinstance(g, MultiLineString) else g
+    )
     offset_geo = gpd.GeoSeries(offset_geo)
     return offset_geo.to_crs(og_crs)
 
