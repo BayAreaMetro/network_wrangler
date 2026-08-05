@@ -205,51 +205,38 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
     WranglerLogger.info(f"Adding centroid connectors for zone:{zone_id} and mode:{mode}")
     WranglerLogger.debug(f"zones_gdf:\n{zones_gdf}")
 
-    G = road_net.get_modal_graph(mode)
-    WranglerLogger.debug(f"Created road_net modal_graph for {mode}:")
+    degrees_col = f"{mode}_graph_degrees"
+    fit_col = f"{mode}_centroid_fit"
 
-    node_dict = {}  # node -> *outgoing* degree to all nodes, centroid_fit
-    for node in G.nodes():
-        # calculate each nodes fitness for centroid based on max of links
-        edge_fit_values = [data[f"{mode}_centroid_fit"] for u, v, data in G.edges(node, data=True)]
-        # WranglerLogger.debug(f"node: {node} edge_fit_values:{edge_fit_values}")
-        node_dict[node] = [G.out_degree(node), max(edge_fit_values) if edge_fit_values else None]
-
-    mode_node_df = pd.DataFrame.from_dict(
-        node_dict, orient="index", columns=[f"{mode}_graph_degrees", f"{mode}_centroid_fit"]
+    # Evaluate each node's fitness to host a centroid connector from the modal links.
+    # A node's out-degree is the number of modal links starting at it (A == node) and
+    # its fitness is the worst (max) fit of those links.
+    modal_links_df = road_net.links_df.mode_query(mode)
+    scores_df = modal_links_df.groupby("A")[fit_col].agg(
+        **{degrees_col: "size", fit_col: "max"}
     )
-    mode_node_df.reset_index(drop=False, names="model_node_id", inplace=True)
-    WranglerLogger.debug(f"Created mode_node_df:\n{mode_node_df}")
+    # drop nodes that must not be used as a centroid connector
+    scores_df = scores_df[scores_df[fit_col] != FitForCentroidConnection.DO_NOT_USE]
 
-    # filter to usable nodes
-    mode_node_df = mode_node_df.loc[
-        mode_node_df[f"{mode}_centroid_fit"] != FitForCentroidConnection.DO_NOT_USE
-    ]
-
-    # get node information for these nodes
+    # attach all node attributes (including geometry) for the usable nodes
     mode_node_df = gpd.GeoDataFrame(
         pd.merge(
-            left=mode_node_df,
-            right=road_net.nodes_df[["model_node_id", "geometry", "osm_node_id", "street_count"]],
-            how="left",
+            left=road_net.nodes_df,
+            right=scores_df,
+            left_on="model_node_id",
+            right_index=True,
+            how="inner",
             validate="one_to_one",
         ),
         geometry="geometry",
         crs=LAT_LON_CRS,
     )
-
-    mode_node_df.fillna({f"{mode}_graph_degrees": 0}, inplace=True)
-    mode_node_df.fillna(
-        {f"{mode}_centroid_fit": FitForCentroidConnection.DO_NOT_USE}, inplace=True
-    )
-    mode_node_df[f"{mode}_graph_degrees"] = mode_node_df[f"{mode}_graph_degrees"].astype(int)
-    mode_node_df[f"{mode}_centroid_fit"] = mode_node_df[f"{mode}_centroid_fit"].astype(int)
     WranglerLogger.debug(
-        f"Added columns from road_net.nodes_df: mode_node_df type={type(mode_node_df)}:\n{mode_node_df}"
+        f"Evaluated {len(mode_node_df):,} usable {mode} nodes for centroid connectors:\n"
+        f"{mode_node_df}"
     )
 
-    # Convert if not
-    assert isinstance(mode_node_df, gpd.GeoDataFrame)
+    # project to the local CRS for distance/angle calculations
     mode_node_df.to_crs(local_crs, inplace=True)
     zones_gdf.to_crs(local_crs, inplace=True)
 
