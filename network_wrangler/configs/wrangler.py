@@ -180,6 +180,10 @@ class ModelRoadwayConfig(ConfigItem):
 
     Attributes:
         ML_OFFSET_METERS: Offset in meters for managed lanes.
+        ACCESS_LINK_ID_OFFSET: Offset added to managed-lane link IDs for generated access
+            connector link IDs.
+        EGRESS_LINK_ID_OFFSET: Offset added to managed-lane link IDs for generated egress
+            connector link IDs.
         ADDITIONAL_COPY_FROM_GP_LINK_TO_ML: Additional link fields to copy from general purpose
             to managed lanes.
         ADDITIONAL_COPY_FROM_GP_NODE_TO_ML: Additional node fields to copy from general purpose
@@ -188,6 +192,8 @@ class ModelRoadwayConfig(ConfigItem):
     """
 
     ML_OFFSET_METERS: int = -10
+    ACCESS_LINK_ID_OFFSET: int = 1_000_000
+    EGRESS_LINK_ID_OFFSET: int = 2_000_000
     ADDITIONAL_COPY_FROM_GP_LINK_TO_ML: list[str] = Field(default_factory=list)
     ADDITIONAL_COPY_FROM_GP_NODE_TO_ML: list[str] = Field(default_factory=list)
     ADDITIONAL_COPY_TO_ACCESS_EGRESS: list[str] = Field(default_factory=list)

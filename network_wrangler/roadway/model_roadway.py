@@ -370,6 +370,8 @@ def model_links_nodes_from_net(
         ml_link_id_lookup,
         ml_node_id_lookup,
         copy_fields=copy_ae_fields,
+        access_link_id_offset=net.config.MODEL_ROADWAY.ACCESS_LINK_ID_OFFSET,
+        egress_link_id_offset=net.config.MODEL_ROADWAY.EGRESS_LINK_ID_OFFSET,
     )
     m_links_df = concat_with_attr([_m_links_df, _access_egress_links_df])
     return m_links_df, m_nodes_df
@@ -497,6 +499,8 @@ def _create_dummy_connector_links(
     ml_link_id_lookup: dict[int, int],
     ml_node_id_lookup: dict[int, int],
     copy_fields: list[str] = COPY_TO_ACCESS_EGRESS,
+    access_link_id_offset: int = DefaultConfig.MODEL_ROADWAY.ACCESS_LINK_ID_OFFSET,
+    egress_link_id_offset: int = DefaultConfig.MODEL_ROADWAY.EGRESS_LINK_ID_OFFSET,
 ) -> DataFrame[RoadLinksTable]:
     """Create dummy connector links between the general purpose and managed lanes.
 
@@ -507,6 +511,8 @@ def _create_dummy_connector_links(
         ml_node_id_lookup: lookup table for managed lane node ids to their general purpose lane
         copy_fields: list of fields to copy from the general purpose links to the dummy links.
             Defaults to COPY_TO_ACCESS_EGRESS.
+        access_link_id_offset: Offset added to mapped ML link IDs for access connector IDs.
+        egress_link_id_offset: Offset added to mapped ML link IDs for egress connector IDs.
 
     returns: GeoDataFrame of access and egress dummy connector links to add to m_links_df
     """
@@ -537,13 +543,9 @@ def _create_dummy_connector_links(
         raise ManagedLaneAccessEgressError(msg)
 
     # access link should go from A_GP to A_ML
-    # Use larger offsets (1M and 2M) to avoid collisions when GP link IDs differ by small amounts
-    ACCESS_LINK_OFFSET = 1_000_000
-    EGRESS_LINK_OFFSET = 2_000_000
-
     access_df["B"] = access_df["A"].map(ml_node_id_lookup)
     access_df["GP_model_link_id"] = access_df["model_link_id"]
-    access_df["model_link_id"] = ACCESS_LINK_OFFSET + access_df["GP_model_link_id"].map(
+    access_df["model_link_id"] = access_link_id_offset + access_df["GP_model_link_id"].map(
         ml_link_id_lookup
     )
     access_df["name"] = "Access Dummy " + access_df["name"]
@@ -554,7 +556,7 @@ def _create_dummy_connector_links(
     # egress link should go from B_ML to B_GP
     egress_df["A"] = egress_df["B"].map(ml_node_id_lookup)
     egress_df["GP_model_link_id"] = egress_df["model_link_id"]
-    egress_df["model_link_id"] = EGRESS_LINK_OFFSET + egress_df["GP_model_link_id"].map(
+    egress_df["model_link_id"] = egress_link_id_offset + egress_df["GP_model_link_id"].map(
         ml_link_id_lookup
     )
     egress_df["name"] = "Egress Dummy " + egress_df["name"]
