@@ -12,7 +12,7 @@ from ...configs import DefaultConfig, WranglerConfig
 from ...errors import NodeAddError
 from ...logger import WranglerLogger
 from ...models.roadway.tables import RoadLinksTable, RoadNodesAttrs, RoadNodesTable
-from ...params import LAT_LON_CRS, SMALL_RECS
+from ...params import LAT_LON_CRS, SMALL_RECS, WEB_MERCATOR_CRS
 from ...utils.geo import get_point_geometry_from_linestring, point_from_xy
 from ...utils.models import validate_df_to_model
 from ..utils import set_df_index_to_pk
@@ -141,31 +141,61 @@ def _create_nodes_from_link(
     nodes_df["X"] = nodes_df.geometry.x
     nodes_df["Y"] = nodes_df.geometry.y
 
-    # Handle duplicate model_node_id values by averaging coordinates
-    # This occurs when the same node appears in multiple GP links
-    duplicate_nodes = nodes_df[nodes_df.duplicated(subset=["model_node_id"], keep=False)]
-    if len(duplicate_nodes) > 0:
-        WranglerLogger.debug(
-            f"Found {len(duplicate_nodes)} duplicate node entries for {duplicate_nodes['model_node_id'].nunique()} unique node IDs"
-        )
-        WranglerLogger.debug(f"Duplicate nodes:\n{duplicate_nodes[['model_node_id', 'X', 'Y']]}")
-
-        # Group by model_node_id and average the coordinates
-        nodes_df = nodes_df.groupby("model_node_id", as_index=False).agg(
-            {"X": "mean", "Y": "mean"}
-        )
-
-        # Recreate geometry from averaged coordinates
-        nodes_df["geometry"] = nodes_df.apply(
-            lambda row: point_from_xy(row["X"], row["Y"]), axis=1
-        )
-        nodes_df = gpd.GeoDataFrame(nodes_df, crs=LAT_LON_CRS)
+    nodes_df = _merge_duplicate_nodes_by_average(nodes_df)
 
     nodes_df["model_node_id_idx"] = nodes_df["model_node_id"]
     nodes_df.set_index("model_node_id_idx", inplace=True)
     nodes_df = validate_df_to_model(nodes_df, RoadNodesTable)
     # WranglerLogger.debug(f"ct3: nodes_df:\n{nodes_df}")
     return nodes_df
+
+
+def _merge_duplicate_nodes_by_average(
+    nodes_df: pd.DataFrame,
+) -> gpd.GeoDataFrame:
+    """Merge duplicate model_node_id rows by averaging coordinates.
+
+    Logs a warning when duplicate geometries for the same model_node_id are spatially
+    far apart, which may indicate an input-network issue.
+    """
+    # Keep this as a local threshold for now; if users need to tune it, we can
+    # promote it to WranglerConfig (e.g., MODEL_ROADWAY) in a follow-up change.
+    DUPLICATE_NODE_WARN_SPREAD_METERS = 100.0
+    duplicate_nodes = nodes_df[nodes_df.duplicated(subset=["model_node_id"], keep=False)]
+    if len(duplicate_nodes) == 0:
+        return gpd.GeoDataFrame(nodes_df, geometry="geometry", crs=LAT_LON_CRS)
+
+    WranglerLogger.debug(
+        f"Found {len(duplicate_nodes)} duplicate node entries for "
+        f"{duplicate_nodes['model_node_id'].nunique()} unique node IDs"
+    )
+    WranglerLogger.debug(f"Duplicate nodes:\n{duplicate_nodes[['model_node_id', 'X', 'Y']]}")
+
+    # Use WEB_MERCATOR_CRS only to measure approximate planar spread in meters
+    # for a warning heuristic. It is globally available and avoids requiring a
+    # region-specific local CRS in this low-stakes diagnostic path.
+    dupes_projected = gpd.GeoDataFrame(duplicate_nodes, geometry="geometry", crs=LAT_LON_CRS).to_crs(
+        WEB_MERCATOR_CRS
+    )
+    dupes_projected["x_m"] = dupes_projected.geometry.x
+    dupes_projected["y_m"] = dupes_projected.geometry.y
+
+    spread_by_id = (
+        dupes_projected.groupby("model_node_id")["geometry"]
+        .apply(lambda geom: geom.apply(lambda g: geom.distance(g).max()).max())
+        .astype(float)
+    )
+    wide_spread = spread_by_id[spread_by_id > DUPLICATE_NODE_WARN_SPREAD_METERS]
+    if not wide_spread.empty:
+        WranglerLogger.warning(
+            "Merging duplicate model_node_id geometries with large spatial spread "
+            f"(>{DUPLICATE_NODE_WARN_SPREAD_METERS:.1f} m) for {len(wide_spread)} nodes. "
+            f"Largest spreads (m): {wide_spread.sort_values(ascending=False).head(10).to_dict()}"
+        )
+
+    merged = nodes_df.groupby("model_node_id", as_index=False).agg({"X": "mean", "Y": "mean"})
+    merged["geometry"] = merged.apply(lambda row: point_from_xy(row["X"], row["Y"]), axis=1)
+    return gpd.GeoDataFrame(merged, geometry="geometry", crs=LAT_LON_CRS)
 
 
 def generate_node_ids(nodes_df: DataFrame[RoadNodesTable], range: tuple[int], n: int) -> list[int]:
