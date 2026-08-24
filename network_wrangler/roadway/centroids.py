@@ -1,4 +1,21 @@
-"""Functions to create centroid connectors."""
+"""Functions to create centroid connectors.
+
+Example usage:
+
+```python
+
+add_centroid_nodes(road_net, zones_gdf, zone_id="TAZ")
+add_centroid_connectors(
+    road_net,
+    zones_gdf,
+    zone_id="TAZ",
+    mode="drive",
+    local_crs="EPSG:26915",
+)
+```
+
+See docs/how_to.md for a fuller end-to-end network creation workflow.
+"""
 
 from enum import IntEnum
 from pathlib import Path
