@@ -93,8 +93,8 @@ def add_centroid_nodes(
         zones_gdf: zones definition which must have two geometry columns:
             'geometry', which the geometry boundary, and 'centroid_geometry',
             which should contain the centroid point location
-        zone_id: the zone id field in zones_gdf; this will be used as the
-            model_node_id
+        zone_id: name of the zone identifier column in zones_gdf. Values in this
+            column are used as model_node_id for the created centroid nodes.
         default_node_attribute_dict: node attributes to set for the new centroid nodes.
             Defaults to None.
     """
@@ -105,9 +105,8 @@ def add_centroid_nodes(
     )
     centroid_nodes_gdf["X"] = centroid_nodes_gdf["geometry"].x
     centroid_nodes_gdf["Y"] = centroid_nodes_gdf["geometry"].y
-    centroid_nodes_gdf["osm_node_id"] = f"{zone_id}:" + centroid_nodes_gdf["model_node_id"].astype(
-        str
-    )
+    # Centroids are synthetic nodes, so do not assign fabricated OSM IDs.
+    centroid_nodes_gdf["osm_node_id"] = None
 
     # set default node attributes
     centroid_nodes_gdf = centroid_nodes_gdf.assign(**(default_node_attribute_dict or {}))
