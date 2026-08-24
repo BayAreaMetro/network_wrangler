@@ -104,6 +104,40 @@ def _prepare_df_for_json(
     return df
 
 
+def _coerce_nested_object_columns_for_parquet(
+    df: pd.DataFrame | gpd.GeoDataFrame,
+) -> tuple[pd.DataFrame | gpd.GeoDataFrame, list[str]]:
+    """Coerce nested object values to JSON strings for parquet compatibility.
+
+    Some object columns can contain Python list/dict/set payloads that Arrow
+    cannot infer reliably from mixed object dtype. This helper only normalizes
+    those nested payloads, preserving scalar objects as-is.
+    """
+    out = df.copy()
+    coerced_cols: list[str] = []
+
+    for col in out.columns:
+        if col == "geometry" or not pd.api.types.is_object_dtype(out[col]):
+            continue
+
+        sample = out[col].dropna().head(50)
+        if sample.empty:
+            continue
+
+        if sample.apply(lambda v: isinstance(v, (list, tuple, dict, set))).any():
+            def _to_json_if_nested(v):
+                if isinstance(v, set):
+                    v = list(v)
+                if isinstance(v, (list, tuple, dict)):
+                    return json.dumps(convert_numpy_to_list(v), default=str)
+                return v
+
+            out[col] = out[col].apply(_to_json_if_nested)
+            coerced_cols.append(col)
+
+    return out, coerced_cols
+
+
 def _convert_dict_to_scoped_pydantic(val):
     """Convert dictionaries back to ScopedLinkValueItem Pydantic models."""
     from ..models.roadway.types import ScopedLinkValueItem
@@ -207,7 +241,21 @@ def write_table(
     elif "parquet" in filename.suffix:
         # Convert Pydantic models to dicts before parquet serialization
         df = _prepare_df_for_json(df)
-        df.to_parquet(filename, index=False, **kwargs)
+        try:
+            df.to_parquet(filename, index=False, **kwargs)
+        except Exception as e:
+            # Fallback for Arrow failures on object columns with nested list/dict payloads.
+            if "Conversion failed for column" in str(e) or "Expected bytes, got a 'list' object" in str(e):
+                safe_df, coerced_cols = _coerce_nested_object_columns_for_parquet(df)
+                if coerced_cols:
+                    WranglerLogger.warning(
+                        f"Parquet write fallback coerced nested object columns to JSON strings: {coerced_cols}"
+                    )
+                    safe_df.to_parquet(filename, index=False, **kwargs)
+                else:
+                    raise
+            else:
+                raise
     elif "csv" in filename.suffix or "txt" in filename.suffix:
         df.to_csv(filename, index=False, date_format="%H:%M:%S", **kwargs)
     elif "geojson" in filename.suffix:

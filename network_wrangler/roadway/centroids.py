@@ -1,6 +1,5 @@
 """Functions to create centroid connectors."""
 
-import math
 from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
@@ -13,6 +12,7 @@ import shapely.geometry
 
 from ..logger import WranglerLogger
 from ..params import LAT_LON_CRS, MODES_TO_NETWORK_LINK_VARIABLES
+from ..utils.geo import point_bearings_degrees
 from .network import RoadwayNetwork
 
 
@@ -37,53 +37,29 @@ def calculate_angle_from_centroid(
     centroid_col: str = "geometry_centroid",
     angle_col: str = "angle_from_north",
 ) -> gpd.GeoDataFrame:
-    """Calculate the angle from centroid to point, measured clockwise from true north.
+    """Add the bearing from each zone centroid to its point, clockwise from north.
 
-    Adds a new column to the GeoDataFrame containing the angle in degrees from true north
-    (0-360) of the line from each zone centroid to its corresponding point geometry.
+    Adds a new column to the GeoDataFrame containing the bearing in degrees (0-360)
+    measured clockwise from north of the line from each centroid to its corresponding
+    point geometry.
 
     Args:
-        gdf: GeoDataFrame with point geometries in the geometry column
-        centroid_col: Name of column containing the centroid geometry (default: 'geometry_centroid')
-        angle_col: Name of the new column to create with angle values (default: 'angle_from_north')
+        gdf: GeoDataFrame with point geometries in the geometry column.
+        centroid_col: Name of the column containing the centroid point geometry
+            (default: 'geometry_centroid').
+        angle_col: Name of the new column to create with bearing values
+            (default: 'angle_from_north').
 
     Returns:
-        GeoDataFrame with new angle column added
+        GeoDataFrame with the new bearing column added.
 
     Note:
-        - Angle is measured clockwise from north (0° = north, 90° = east, 180° = south, 270° = west)
-        - Returns values in range [0, 360)
-        - Assumes geometries are in a projected coordinate system or handles lat/lon appropriately
+        - Bearing is measured clockwise from north (0=north, 90=east, 180=south, 270=west)
+          in the coordinate system of ``gdf``, so the geometries should be in a projected
+          CRS for a planar bearing.
+        - Returns values in the range [0, 360).
     """
-
-    def calculate_bearing(centroid, point):
-        """Calculate bearing angle from centroid to point."""
-        if not centroid:
-            return None
-        if not point:
-            return None
-
-        # Calculate difference
-        dx = point.x - centroid.x
-        dy = point.y - centroid.y
-
-        # Calculate angle in radians from east (standard math convention)
-        angle_rad = math.atan2(dy, dx)
-
-        # Convert to degrees
-        angle_deg = math.degrees(angle_rad)
-
-        # Convert from east-based to north-based (geographic convention)
-        # and from counter-clockwise to clockwise
-        bearing = (90 - angle_deg) % 360
-
-        return bearing
-
-    # Calculate angles for all rows
-    gdf[angle_col] = gdf.apply(
-        lambda row: calculate_bearing(row[centroid_col], row["geometry"]), axis=1
-    )
-
+    gdf[angle_col] = point_bearings_degrees(gdf[centroid_col], gdf.geometry)
     return gdf
 
 
@@ -258,8 +234,8 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
     # calculate distance from centroid
     gs = gpd.GeoSeries(mode_node_df["geometry_centroid"], crs=LAT_LON_CRS)  # source CRS
     mode_node_df["geometry_centroid"] = gs.to_crs(local_crs).values  # target CRS
-    mode_node_df["distance_from_centroid"] = mode_node_df.apply(
-        lambda row: row["geometry"].distance(row["geometry_centroid"]), axis=1
+    mode_node_df["distance_from_centroid"] = mode_node_df.geometry.distance(
+        gpd.GeoSeries(mode_node_df["geometry_centroid"], crs=local_crs)
     )
     WranglerLogger.debug(
         f"After spatial join, mode_node_df type={type(mode_node_df)}:\n{mode_node_df}"
@@ -288,66 +264,44 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
     mode_node_df.reset_index(drop=True, inplace=True)
     mode_node_df["connector_num"] = 0
 
-    def calculate_min_angle_separation(candidate_angle, selected_angles):
-        """Calculate the minimum angular separation between candidate and all selected angles."""
-        if len(selected_angles) == 0:
-            return 360  # Maximum possible separation if no angles selected yet
-        # Vectorized angle difference calculation
-        angle_diffs = np.abs(candidate_angle - selected_angles)
-        # Handle wraparound
-        angle_diffs = np.minimum(angle_diffs, 360 - angle_diffs)
-        return np.min(angle_diffs)
-
     WranglerLogger.debug(
         f"Before choosing centroid connector nodes, mode_node_df:\n{mode_node_df}"
     )
 
-    # Process each zone and select connectors
-    for zone_num in mode_node_df[zone_id].unique():
-        zone_mask = mode_node_df[zone_id] == zone_num
-        zone_data = mode_node_df[zone_mask].copy()  # Copy to avoid SettingWithCopyWarning
+    fit_col = f"{mode}_centroid_fit"
 
-        if len(zone_data) == 0:
+    # Process each zone and select connectors with incremental min-angle updates.
+    # Rows are pre-sorted by [zone_id, fit_col, distance_from_centroid], so within each zone
+    # row 0 is always the best-fit and closest seed connector.
+    for zone_num, zone_data in mode_node_df.groupby(zone_id, sort=False):
+        if zone_data.empty:
             WranglerLogger.warning(f"No centroid connectors for {zone_id} {zone_num}")
             continue
 
-        # 1: choose the connector with the lowest f"{mode}_centroid_fit" and lowest distance_from_centroid
-        # Since data is already sorted by fit and distance, first row is the best
-        first_idx = zone_data.index[0]
-        mode_node_df.loc[first_idx, "connector_num"] = 1
-        zone_data.loc[first_idx, "connector_num"] = 1
+        idx = zone_data.index.to_numpy()
+        angles = zone_data["centroid_angle"].to_numpy()
+        fit = zone_data[fit_col].to_numpy()
+        conn = np.zeros(len(zone_data), dtype=int)
 
-        # 2-n: select additional connectors, choosing the one with maximum angular separation
-        # from existing connectors, prioritizing by lowest {mode}_centroid_fit first
+        def circ_sep(a: float) -> np.ndarray:
+            d = np.abs(angles - a)
+            return np.minimum(d, 360 - d)
+
+        conn[0] = 1
+        min_sep = circ_sep(angles[0])
+
         for connector_num in range(2, num_centroid_connectors + 1):
-            # Get already selected connectors and candidates
-            selected_mask = zone_data["connector_num"] > 0
-            candidate_mask = zone_data["connector_num"] == 0
+            unsel = conn == 0
+            if not unsel.any():
+                break
 
-            if not candidate_mask.any():
-                break  # No more candidates for this zone
+            best_fit = fit[unsel].min()
+            eligible = unsel & (fit == best_fit)
+            pick = int(np.argmax(np.where(eligible, min_sep, -np.inf)))
+            conn[pick] = connector_num
+            min_sep = np.minimum(min_sep, circ_sep(angles[pick]))
 
-            selected_angles = zone_data.loc[selected_mask, "centroid_angle"].values
-            candidates = zone_data[candidate_mask].copy()
-
-            # Calculate minimum angular separation for each candidate
-            candidates["min_angle_sep"] = candidates["centroid_angle"].apply(
-                lambda angle, _sa=selected_angles: calculate_min_angle_separation(angle, _sa)
-            )
-
-            # Group by centroid_fit level and find the one with max angular separation within each level
-            # Since data is already sorted by fit, we can process in order
-            best_fit = candidates[f"{mode}_centroid_fit"].min()
-            best_fit_candidates = candidates[candidates[f"{mode}_centroid_fit"] == best_fit]
-
-            # Among candidates with the best fit, choose the one with maximum angular separation
-            if len(best_fit_candidates) > 0:
-                selected_idx = best_fit_candidates["min_angle_sep"].idxmax()
-                mode_node_df.loc[selected_idx, "connector_num"] = connector_num
-                # Update zone_data to reflect this selection for next iteration
-                zone_data.loc[selected_idx, "connector_num"] = connector_num
-            else:
-                break  # No more candidates
+        mode_node_df.loc[idx, "connector_num"] = conn
 
     # Filter to only selected connectors
     mode_node_df = mode_node_df[mode_node_df["connector_num"] > 0]

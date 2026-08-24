@@ -664,6 +664,29 @@ def get_link_bearings_degrees(geometry: gpd.GeoSeries) -> pd.Series:
     return pd.Series(bearings, index=geometry.index)
 
 
+def point_bearings_degrees(
+    from_points: gpd.GeoSeries, to_points: gpd.GeoSeries
+) -> np.ndarray:
+    """Calculate the planar bearing from each ``from`` point to each ``to`` point.
+
+    Vectorized over two aligned sequences of point geometries. The bearing is measured
+    clockwise from north in the coordinate system of the inputs (0=+y/north, 90=+x/east),
+    so the points should already be in a projected CRS when a planar bearing is desired.
+
+    Args:
+        from_points: origin point geometries (e.g. zone centroids).
+        to_points: destination point geometries, aligned position-wise to ``from_points``.
+
+    Returns:
+        numpy array of bearings in degrees in the range [0, 360).
+    """
+    from_gs = gpd.GeoSeries(from_points)
+    to_gs = gpd.GeoSeries(to_points)
+    dx = to_gs.x.to_numpy() - from_gs.x.to_numpy()
+    dy = to_gs.y.to_numpy() - from_gs.y.to_numpy()
+    return (90.0 - np.degrees(np.arctan2(dy, dx))) % 360.0
+
+
 def bearings_to_cardinal_directions(
     bearings: pd.Series, cardinal_only: bool = False
 ) -> pd.Series:
