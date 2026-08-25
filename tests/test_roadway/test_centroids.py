@@ -67,7 +67,7 @@ def test_add_centroid_nodes(centroid_net, zones_gdf):
     """Centroid nodes are added with model_node_id = zone id and X/Y at the centroid."""
     n_nodes_before = len(centroid_net.nodes_df)
 
-    add_centroid_nodes(centroid_net, zones_gdf, zone_id="TAZ")
+    add_centroid_nodes(centroid_net, zones_gdf, zone_id_col="TAZ")
 
     assert len(centroid_net.nodes_df) == n_nodes_before + len(zones_gdf)
     for _, zone in zones_gdf.iterrows():
@@ -81,13 +81,13 @@ def test_add_centroid_nodes(centroid_net, zones_gdf):
 def test_add_centroid_connectors(centroid_net, zones_gdf):
     """Connectors are created bidirectionally for each zone up to the requested count."""
     num_connectors = 2
-    add_centroid_nodes(centroid_net, zones_gdf, zone_id="TAZ")
+    add_centroid_nodes(centroid_net, zones_gdf, zone_id_col="TAZ")
     n_links_before = len(centroid_net.links_df)
 
     summary = add_centroid_connectors(
         centroid_net,
         zones_gdf.copy(),
-        zone_id="TAZ",
+        zone_id_col="TAZ",
         mode="drive",
         local_crs=LOCAL_CRS,
         zone_buffer_distance=50,
