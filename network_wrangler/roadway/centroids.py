@@ -3,12 +3,12 @@
 Example usage:
 
 ```python
-
-add_centroid_nodes(road_net, zones_gdf, zone_id="TAZ")
+# zone_id is the name of the identifier column in zones_gdf.
+add_centroid_nodes(road_net, zones_gdf, zone_id="TAZ_NODE")
 add_centroid_connectors(
     road_net,
     zones_gdf,
-    zone_id="TAZ",
+    zone_id="TAZ_NODE",
     mode="drive",
     local_crs="EPSG:26915",
 )
@@ -25,11 +25,14 @@ import geopandas as gpd
 import networkx as nx
 import numpy as np
 import pandas as pd
+from pandera.typing import DataFrame
 import shapely.geometry
 
 from ..logger import WranglerLogger
+from ..models.roadway.tables import ZonesTable
 from ..params import LAT_LON_CRS, MODES_TO_NETWORK_LINK_VARIABLES
 from ..utils.geo import point_bearings_degrees
+from ..utils.models import validate_df_to_model
 from .network import RoadwayNetwork
 
 
@@ -47,6 +50,24 @@ class FitForCentroidConnection(IntEnum):
     GOOD = 2
     OKAY = 3
     DO_NOT_USE = 100
+
+
+def _validate_zones_for_centroids(
+    zones_gdf: gpd.GeoDataFrame,
+    zone_id: str,
+) -> DataFrame[ZonesTable]:
+    """Validate centroid-zone input schema and coerce zone IDs to integers.
+
+    Internally validates against ``ZonesTable`` by temporarily normalizing the
+    user-specified ``zone_id`` column name to ``zone_id``.
+    """
+    if zone_id not in zones_gdf.columns:
+        msg = f"zones_gdf is missing required zone id column: {zone_id}"
+        raise ValueError(msg)
+
+    normalized = zones_gdf.rename(columns={zone_id: "zone_id"}).copy()
+    validated = validate_df_to_model(normalized, ZonesTable)
+    return validated.rename(columns={"zone_id": zone_id})
 
 
 def calculate_angle_from_centroid(
@@ -82,7 +103,7 @@ def calculate_angle_from_centroid(
 
 def add_centroid_nodes(
     road_net: RoadwayNetwork,
-    zones_gdf: gpd.GeoDataFrame,
+    zones_gdf: DataFrame[ZonesTable],
     zone_id: str,
     default_node_attribute_dict: dict[str, any] | None = None,
 ):
@@ -90,14 +111,17 @@ def add_centroid_nodes(
 
     Args:
         road_net: the RoadwayNetwork to update by adding centroids
-        zones_gdf: zones definition which must have two geometry columns:
-            'geometry', which the geometry boundary, and 'centroid_geometry',
-            which should contain the centroid point location
+        zones_gdf: zone definitions with polygon geometry in ``geometry`` and
+            centroid point geometry in ``geometry_centroid``.
         zone_id: name of the zone identifier column in zones_gdf. Values in this
-            column are used as model_node_id for the created centroid nodes.
+            column are used as ``model_node_id`` for the created centroid nodes.
+            This argument is the *column name* (for example ``"TAZ_NODE"``),
+            not a specific zone value. The values must be integer-like.
         default_node_attribute_dict: node attributes to set for the new centroid nodes.
             Defaults to None.
     """
+    zones_gdf = _validate_zones_for_centroids(zones_gdf, zone_id)
+
     centroid_nodes_gdf = (
         zones_gdf[[zone_id, "geometry_centroid"]]
         .rename(columns={"geometry_centroid": "geometry", zone_id: "model_node_id"})
@@ -123,7 +147,7 @@ def add_centroid_nodes(
 
 def add_centroid_connectors(  # noqa: PLR0912, PLR0915
     road_net: RoadwayNetwork,
-    zones_gdf: gpd.GeoDataFrame,
+    zones_gdf: DataFrame[ZonesTable],
     zone_id: str,
     mode: str,
     local_crs: str,
@@ -174,11 +198,13 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
         road_net: the RoadwayNetwork to update by adding centroid connectors.
             Assumes centroids exist as nodes already. Also assumes links have
             an attribute, `{mode}_centroid_fit`, set to one of the FitForCentroidConnect values.
-        zones_gdf: zones definition which must have two geometry columns:
-            'geometry', which the geometry boundary, and 'centroid_geometry',
-            which should contain the centroid point location (in LAT_LON_CRS)
-        zone_id: the zone id field in zones_gdf; this will be used as the
-            model_node_id for the centroid
+        zones_gdf: zone definitions with polygon geometry in ``geometry`` and
+            centroid point geometry in ``geometry_centroid`` (in ``LAT_LON_CRS``).
+            Must also include the identifier column named by ``zone_id``.
+        zone_id: name of the identifier column in ``zones_gdf`` (for example
+            ``"TAZ_NODE"``). Values from this column map to
+            centroid ``model_node_id`` values.
+            Zone identifier values must be integer-like.
         mode: one of the keys in [`MODES_TO_NETWORK_LINK_VARIABLES`][network_wrangler.params.MODES_TO_NETWORK_LINK_VARIABLES]
         local_crs: CRS to use for distance calculations
         zone_buffer_distance: buffer distance from zone shape to consider node for centroid connector.
@@ -194,6 +220,8 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
             additional column: `{zone_id}_num_connectors`.
 
     """
+    zones_gdf = _validate_zones_for_centroids(zones_gdf, zone_id)
+
     WranglerLogger.info(f"Adding centroid connectors for zone:{zone_id} and mode:{mode}")
     WranglerLogger.debug(f"zones_gdf:\n{zones_gdf}")
 
