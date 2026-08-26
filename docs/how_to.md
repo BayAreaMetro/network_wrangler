@@ -163,12 +163,17 @@ Before adding centroids, apply any additional enrichment to the network: setting
 Add zone centroid nodes and create connector links using [`add_centroid_nodes()`](api_roadway.md#network_wrangler.roadway.centroids.add_centroid_nodes) and [`add_centroid_connectors()`](api_roadway.md#network_wrangler.roadway.centroids.add_centroid_connectors).
 
 ```python
-from network_wrangler.roadway.centroids import add_centroid_nodes, add_centroid_connectors
+from network_wrangler.roadway.centroids import (
+    prepare_zones_table,
+    add_centroid_nodes,
+    add_centroid_connectors,
+)
 
 # TAZ connectors
-add_centroid_nodes(road_net, taz_zones_gdf, zone_id_col="TAZ_NODE")
+taz_zones_table = prepare_zones_table(taz_zones_gdf, zone_id_col="TAZ1454")
+add_centroid_nodes(road_net, taz_zones_table)
 add_centroid_connectors(
-    road_net, taz_zones_gdf, zone_id_col="TAZ_NODE", mode="drive",
+    road_net, taz_zones_table, mode="drive",
     local_crs=local_crs,
     zone_buffer_distance=20,    # units of local_crs — search radius beyond zone boundary
     num_centroid_connectors=4,  # max connectors per zone

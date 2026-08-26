@@ -15,6 +15,8 @@ from network_wrangler.roadway.centroids import (
     add_centroid_connectors,
     add_centroid_nodes,
     calculate_angle_from_centroid,
+    prepare_zones_table,
+    zones_table_to_gdf,
 )
 
 LAT_LON_CRS = 4326
@@ -67,7 +69,8 @@ def test_add_centroid_nodes(centroid_net, zones_gdf):
     """Centroid nodes are added with model_node_id = zone id and X/Y at the centroid."""
     n_nodes_before = len(centroid_net.nodes_df)
 
-    add_centroid_nodes(centroid_net, zones_gdf, zone_id_col="TAZ")
+    zones_table = prepare_zones_table(zones_gdf, zone_id_col="TAZ")
+    add_centroid_nodes(centroid_net, zones_table)
 
     assert len(centroid_net.nodes_df) == n_nodes_before + len(zones_gdf)
     for _, zone in zones_gdf.iterrows():
@@ -81,13 +84,13 @@ def test_add_centroid_nodes(centroid_net, zones_gdf):
 def test_add_centroid_connectors(centroid_net, zones_gdf):
     """Connectors are created bidirectionally for each zone up to the requested count."""
     num_connectors = 2
-    add_centroid_nodes(centroid_net, zones_gdf, zone_id_col="TAZ")
+    zones_table = prepare_zones_table(zones_gdf, zone_id_col="TAZ")
+    add_centroid_nodes(centroid_net, zones_table)
     n_links_before = len(centroid_net.links_df)
 
     summary = add_centroid_connectors(
         centroid_net,
-        zones_gdf.copy(),
-        zone_id_col="TAZ",
+        zones_table.copy(),
         mode="drive",
         local_crs=LOCAL_CRS,
         zone_buffer_distance=50,
@@ -96,7 +99,7 @@ def test_add_centroid_connectors(centroid_net, zones_gdf):
         default_link_attribute_dict={"lanes": 1},
     )
 
-    per_zone = dict(zip(summary["TAZ"], summary["num_connectors"]))
+    per_zone = dict(zip(summary["zone_id"], summary["num_connectors"]))
     assert per_zone == {1001: num_connectors, 1002: num_connectors}
 
     n_added = len(centroid_net.links_df) - n_links_before
@@ -111,3 +114,20 @@ def test_add_centroid_connectors(centroid_net, zones_gdf):
         assert len(inbound) == count
         # the same nodes are connected in both directions
         assert set(outbound["B"]) == set(inbound["A"])
+
+
+def test_zones_table_roundtrip_with_metadata(zones_gdf):
+    """Zones table conversion preserves metadata and restores requested ID column name."""
+    zones_table = prepare_zones_table(
+        zones_gdf,
+        zone_id_col="TAZ",
+        metadata={"zone_name": "TAZ"},
+    )
+
+    assert zones_table.attrs["zone_id_col"] == "TAZ"
+    assert zones_table.attrs["zone_name"] == "TAZ"
+
+    roundtrip = zones_table_to_gdf(zones_table)
+    assert "TAZ" in roundtrip.columns
+    assert "zone_id" not in roundtrip.columns
+    assert roundtrip.attrs["zone_name"] == "TAZ"
