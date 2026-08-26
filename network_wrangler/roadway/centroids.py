@@ -275,7 +275,7 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
     scores_df = scores_df[scores_df[fit_col] != FitForCentroidConnection.DO_NOT_USE]
 
     # attach all node attributes (including geometry) for the usable nodes
-    mode_node_df = gpd.GeoDataFrame(
+    candidate_nodes_df = gpd.GeoDataFrame(
         pd.merge(
             left=road_net.nodes_df,
             right=scores_df,
@@ -288,17 +288,17 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
         crs=LAT_LON_CRS,
     )
     WranglerLogger.debug(
-        f"Evaluated {len(mode_node_df):,} usable {mode} nodes for centroid connectors:\n"
-        f"{mode_node_df}"
+        f"Evaluated {len(candidate_nodes_df):,} usable {mode} nodes for centroid connectors:\n"
+        f"{candidate_nodes_df}"
     )
 
     # project to the local CRS for distance/angle calculations
-    mode_node_df.to_crs(local_crs, inplace=True)
+    candidate_nodes_df.to_crs(local_crs, inplace=True)
     zones_table.to_crs(local_crs, inplace=True)
 
     # spatial intersect nodes with zones
-    mode_node_df = gpd.sjoin(
-        left_df=mode_node_df,
+    candidate_nodes_df = gpd.sjoin(
+        left_df=candidate_nodes_df,
         right_df=zones_table[["zone_id", "geometry", "geometry_centroid"]],
         how="left",
         predicate="dwithin",  # give zones a little buffer because of edge cases
@@ -308,43 +308,43 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
     # be connected to multiple centroid connectors
     WranglerLogger.debug(
         f"After spatial join, non-unique model_node_ids:\n"
-        f"{mode_node_df.loc[mode_node_df['model_node_id'].duplicated(keep=False)]}"
+        f"{candidate_nodes_df.loc[candidate_nodes_df['model_node_id'].duplicated(keep=False)]}"
     )
 
     # calculate distance from centroid
-    gs = gpd.GeoSeries(mode_node_df["geometry_centroid"], crs=LAT_LON_CRS)  # source CRS
-    mode_node_df["geometry_centroid"] = gs.to_crs(local_crs).values  # target CRS
-    mode_node_df["distance_from_centroid"] = mode_node_df.geometry.distance(
-        gpd.GeoSeries(mode_node_df["geometry_centroid"], crs=local_crs)
+    gs = gpd.GeoSeries(candidate_nodes_df["geometry_centroid"], crs=LAT_LON_CRS)  # source CRS
+    candidate_nodes_df["geometry_centroid"] = gs.to_crs(local_crs).values  # target CRS
+    candidate_nodes_df["distance_from_centroid"] = candidate_nodes_df.geometry.distance(
+        gpd.GeoSeries(candidate_nodes_df["geometry_centroid"], crs=local_crs)
     )
     WranglerLogger.debug(
-        f"After spatial join, mode_node_df type={type(mode_node_df)}:\n{mode_node_df}"
+        f"After spatial join, candidate_nodes_df type={type(candidate_nodes_df)}:\n{candidate_nodes_df}"
     )
 
     # add bearing from centroid
-    mode_node_df = calculate_bearing_from_centroid(
-        mode_node_df, "geometry_centroid", "centroid_angle"
+    candidate_nodes_df = calculate_bearing_from_centroid(
+        candidate_nodes_df, "geometry_centroid", "centroid_angle"
     )
     WranglerLogger.debug(
-        f"After adding angle from centroid, mode_node_df type={type(mode_node_df)}:\n{mode_node_df}"
+        f"After adding angle from centroid, candidate_nodes_df type={type(candidate_nodes_df)}:\n{candidate_nodes_df}"
     )
 
     # Filter to nodes within the given zones
-    mode_node_df = mode_node_df.loc[mode_node_df["zone_id"].notna()]
+    candidate_nodes_df = candidate_nodes_df.loc[candidate_nodes_df["zone_id"].notna()]
     # and mode_graph_degress <= max_mode_graph_degress
-    mode_node_df = mode_node_df.loc[
-        mode_node_df[f"{mode}_graph_degrees"] <= max_mode_graph_degrees
+    candidate_nodes_df = candidate_nodes_df.loc[
+        candidate_nodes_df[f"{mode}_graph_degrees"] <= max_mode_graph_degrees
     ]
 
     # sort by drive_centroid_fit, centroid_angle
-    mode_node_df.sort_values(
+    candidate_nodes_df.sort_values(
         by=["zone_id", f"{mode}_centroid_fit", "distance_from_centroid"], inplace=True
     )
-    mode_node_df.reset_index(drop=True, inplace=True)
-    mode_node_df["connector_num"] = 0
+    candidate_nodes_df.reset_index(drop=True, inplace=True)
+    candidate_nodes_df["connector_num"] = 0
 
     WranglerLogger.debug(
-        f"Before choosing centroid connector nodes, mode_node_df:\n{mode_node_df}"
+        f"Before choosing centroid connector nodes, candidate_nodes_df:\n{candidate_nodes_df}"
     )
 
     fit_col = f"{mode}_centroid_fit"
@@ -352,7 +352,7 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
     # Process each zone and select connectors with incremental min-angle updates.
     # Rows are pre-sorted by [zone_id, fit_col, distance_from_centroid], so within each zone
     # row 0 is always the best-fit and closest seed connector.
-    for zone_num, zone_data in mode_node_df.groupby("zone_id", sort=False):
+    for zone_num, zone_data in candidate_nodes_df.groupby("zone_id", sort=False):
         if zone_data.empty:
             WranglerLogger.warning(f"No centroid connectors for {zone_id_label} {zone_num}")
             continue
@@ -380,19 +380,19 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
             conn[pick] = connector_num
             min_sep = np.minimum(min_sep, circ_sep(angles[pick]))
 
-        mode_node_df.loc[idx, "connector_num"] = conn
+        candidate_nodes_df.loc[idx, "connector_num"] = conn
 
     # Filter to only selected connectors
-    mode_node_df = mode_node_df[mode_node_df["connector_num"] > 0]
-    mode_node_df.sort_values(by=["zone_id", "connector_num"], inplace=True)
-    mode_node_df.reset_index(drop=True, inplace=True)
+    candidate_nodes_df = candidate_nodes_df[candidate_nodes_df["connector_num"] > 0]
+    candidate_nodes_df.sort_values(by=["zone_id", "connector_num"], inplace=True)
+    candidate_nodes_df.reset_index(drop=True, inplace=True)
 
     WranglerLogger.info(
-        f"Selected {len(mode_node_df):,} centroid connectors for {len(zones_table):,} {zone_id_label}s"
+        f"Selected {len(candidate_nodes_df):,} centroid connectors for {len(zones_table):,} {zone_id_label}s"
     )
-    WranglerLogger.debug(f"mode_node_df:\n{mode_node_df}")
+    WranglerLogger.debug(f"candidate_nodes_df:\n{candidate_nodes_df}")
     # create centroid connector links: zone to node
-    links_taz_to_node_df = mode_node_df.copy()
+    links_taz_to_node_df = candidate_nodes_df.copy()
     links_taz_to_node_df.rename(
         columns={"zone_id": "A", "model_node_id": "B", "distance_from_centroid": "length"},
         inplace=True,
@@ -403,7 +403,7 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
         axis=1,
     )
     # create centroid connector links: node to zone
-    links_node_to_taz_df = mode_node_df.copy()
+    links_node_to_taz_df = candidate_nodes_df.copy()
     links_node_to_taz_df.rename(
         columns={"model_node_id": "A", "zone_id": "B", "distance_from_centroid": "length"},
         inplace=True,
@@ -452,7 +452,7 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
 
     # summarize number of connectors per zone
     summary_df = (
-        mode_node_df.groupby(by="zone_id")
+        candidate_nodes_df.groupby(by="zone_id")
         .aggregate(num_connectors=pd.NamedAgg(column="model_node_id", aggfunc="nunique"))
         .reset_index(drop=False)
     )
