@@ -338,81 +338,63 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
 
     # sort by drive_centroid_fit, centroid_angle
     candidate_nodes_df.sort_values(
-        by=["zone_id", f"{mode}_centroid_fit", "distance_from_centroid"], inplace=True
+        by=["zone_id", fit_col, "distance_from_centroid"], inplace=True
     )
     candidate_nodes_df.reset_index(drop=True, inplace=True)
-    candidate_nodes_df["connector_num"] = 0
 
     WranglerLogger.debug(
         f"Before choosing centroid connector nodes, candidate_nodes_df:\n{candidate_nodes_df}"
     )
 
-    fit_col = f"{mode}_centroid_fit"
+    # Vectorized sector-based connector selection: divide the bearing circle into
+    # num_centroid_connectors equal sectors and pick the best-fit, closest node
+    # per (zone, sector).
+    sector_width = 360.0 / num_centroid_connectors
+    candidate_nodes_df["sector"] = (
+        (candidate_nodes_df["centroid_angle"] % 360) // sector_width
+    ).astype(int)
+    candidate_nodes_df["sector_rank"] = (
+        candidate_nodes_df.groupby(["zone_id", "sector"]).cumcount()
+    )
+    candidate_nodes_df.sort_values(
+        ["zone_id", "sector_rank", fit_col, "distance_from_centroid"], inplace=True
+    )
+    selected_nodes_df = candidate_nodes_df.groupby("zone_id").head(num_centroid_connectors).copy()
+    selected_nodes_df["connector_num"] = selected_nodes_df.groupby("zone_id").cumcount() + 1
+    selected_nodes_df.reset_index(drop=True, inplace=True)
 
-    # Process each zone and select connectors with incremental min-angle updates.
-    # Rows are pre-sorted by [zone_id, fit_col, distance_from_centroid], so within each zone
-    # row 0 is always the best-fit and closest seed connector.
-    for zone_num, zone_data in candidate_nodes_df.groupby("zone_id", sort=False):
-        if zone_data.empty:
-            WranglerLogger.warning(f"No centroid connectors for {zone_id_label} {zone_num}")
-            continue
-
-        idx = zone_data.index.to_numpy()
-        angles = zone_data["centroid_angle"].to_numpy()
-        fit = zone_data[fit_col].to_numpy()
-        conn = np.zeros(len(zone_data), dtype=int)
-
-        def circ_sep(a: float) -> np.ndarray:
-            d = np.abs(angles - a)
-            return np.minimum(d, 360 - d)
-
-        conn[0] = 1
-        min_sep = circ_sep(angles[0])
-
-        for connector_num in range(2, num_centroid_connectors + 1):
-            unsel = conn == 0
-            if not unsel.any():
-                break
-
-            best_fit = fit[unsel].min()
-            eligible = unsel & (fit == best_fit)
-            pick = int(np.argmax(np.where(eligible, min_sep, -np.inf)))
-            conn[pick] = connector_num
-            min_sep = np.minimum(min_sep, circ_sep(angles[pick]))
-
-        candidate_nodes_df.loc[idx, "connector_num"] = conn
-
-    # Filter to only selected connectors
-    candidate_nodes_df = candidate_nodes_df[candidate_nodes_df["connector_num"] > 0]
-    candidate_nodes_df.sort_values(by=["zone_id", "connector_num"], inplace=True)
-    candidate_nodes_df.reset_index(drop=True, inplace=True)
+    # warn for zones that ended up with no connectors at all
+    zones_with_connectors = set(selected_nodes_df["zone_id"])
+    for _zone_id in zones_table["zone_id"]:
+        if _zone_id not in zones_with_connectors:
+            WranglerLogger.warning(f"No centroid connectors for {zone_id_label} {_zone_id}")
 
     WranglerLogger.info(
-        f"Selected {len(candidate_nodes_df):,} centroid connectors for {len(zones_table):,} {zone_id_label}s"
+        f"Selected {len(selected_nodes_df):,} centroid connectors for {len(zones_table):,} {zone_id_label}s"
     )
-    WranglerLogger.debug(f"candidate_nodes_df:\n{candidate_nodes_df}")
+    WranglerLogger.debug(f"selected_nodes_df:\n{selected_nodes_df}")
     # create centroid connector links: zone to node
-    links_taz_to_node_df = candidate_nodes_df.copy()
+    links_taz_to_node_df = selected_nodes_df.copy()
     links_taz_to_node_df.rename(
         columns={"zone_id": "A", "model_node_id": "B", "distance_from_centroid": "length"},
         inplace=True,
     )
     links_taz_to_node_df["name"] = f"{zone_id_label} to node"
-    links_taz_to_node_df["geometry"] = links_taz_to_node_df.apply(
-        lambda row: shapely.geometry.LineString([row["geometry_centroid"], row["geometry"]]),
-        axis=1,
-    )
+    links_taz_to_node_df["geometry"] = [
+        shapely.geometry.LineString([c, g])
+        for c, g in zip(links_taz_to_node_df["geometry_centroid"], links_taz_to_node_df["geometry"])
+    ]
     # create centroid connector links: node to zone
-    links_node_to_taz_df = candidate_nodes_df.copy()
+    links_node_to_taz_df = selected_nodes_df.copy()
     links_node_to_taz_df.rename(
         columns={"model_node_id": "A", "zone_id": "B", "distance_from_centroid": "length"},
         inplace=True,
     )
     links_node_to_taz_df["name"] = f"node to {zone_id_label}"
-    links_node_to_taz_df["geometry"] = links_node_to_taz_df.apply(
-        lambda row: shapely.geometry.LineString([row["geometry"], row["geometry_centroid"]]),
-        axis=1,
-    )
+    links_node_to_taz_df["geometry"] = [
+        shapely.geometry.LineString([g, c])
+        for g, c in zip(links_node_to_taz_df["geometry"], links_node_to_taz_df["geometry_centroid"])
+    ]
 
     # Put together zone to node and node to zone
     centroid_links_df = pd.concat([links_taz_to_node_df, links_node_to_taz_df])
@@ -452,7 +434,7 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
 
     # summarize number of connectors per zone
     summary_df = (
-        candidate_nodes_df.groupby(by="zone_id")
+        selected_nodes_df.groupby(by="zone_id")
         .aggregate(num_connectors=pd.NamedAgg(column="model_node_id", aggfunc="nunique"))
         .reset_index(drop=False)
     )
