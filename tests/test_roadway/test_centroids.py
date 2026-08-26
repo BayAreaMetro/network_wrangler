@@ -14,7 +14,7 @@ from network_wrangler.roadway.centroids import (
     FitForCentroidConnection,
     add_centroid_connectors,
     add_centroid_nodes,
-    calculate_angle_from_centroid,
+    calculate_bearing_from_centroid,
     prepare_zones_table,
     zones_table_to_gdf,
 )
@@ -51,8 +51,8 @@ def zones_gdf(centroid_net):
     return gpd.GeoDataFrame(zones, geometry="geometry", crs=LAT_LON_CRS)
 
 
-def test_calculate_angle_from_centroid_cardinal_points():
-    """Angle-from-centroid returns clockwise-from-north bearings for the 4 cardinals."""
+def test_calculate_bearing_from_centroid_cardinal_points():
+    """calculate_bearing_from_centroid returns clockwise-from-north bearings for the 4 cardinals."""
     # points due N, E, S, W of the origin centroid
     gdf = gpd.GeoDataFrame(
         {"geometry": [Point(0, 1), Point(1, 0), Point(0, -1), Point(-1, 0)]},
@@ -60,7 +60,7 @@ def test_calculate_angle_from_centroid_cardinal_points():
     )
     gdf["geometry_centroid"] = [Point(0, 0)] * 4
 
-    result = calculate_angle_from_centroid(gdf, "geometry_centroid", "angle")
+    result = calculate_bearing_from_centroid(gdf, "geometry_centroid", "angle")
 
     assert result["angle"].round().tolist() == [0.0, 90.0, 180.0, 270.0]
 

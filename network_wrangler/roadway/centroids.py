@@ -107,10 +107,10 @@ def zones_table_to_gdf(
     return zones_gdf
 
 
-def calculate_angle_from_centroid(
+def calculate_bearing_from_centroid(
     gdf: gpd.GeoDataFrame,
     centroid_col: str = "geometry_centroid",
-    angle_col: str = "angle_from_north",
+    bearing_col: str = "bearing",
 ) -> gpd.GeoDataFrame:
     """Add the bearing from each zone centroid to its point, clockwise from north.
 
@@ -122,19 +122,27 @@ def calculate_angle_from_centroid(
         gdf: GeoDataFrame with point geometries in the geometry column.
         centroid_col: Name of the column containing the centroid point geometry
             (default: 'geometry_centroid').
-        angle_col: Name of the new column to create with bearing values
-            (default: 'angle_from_north').
+        bearing_col: Name of the new column to store bearing values
+            (default: 'bearing').
 
     Returns:
         GeoDataFrame with the new bearing column added.
 
+    Raises:
+        ValueError: if ``gdf`` is in a geographic (lat/lon) CRS. Bearings require
+            projected coordinates for meaningful planar results.
+
     Note:
-        - Bearing is measured clockwise from north (0=north, 90=east, 180=south, 270=west)
-          in the coordinate system of ``gdf``, so the geometries should be in a projected
-          CRS for a planar bearing.
+        - Bearing is measured clockwise from north (0=north, 90=east, 180=south, 270=west).
         - Returns values in the range [0, 360).
     """
-    gdf[angle_col] = point_bearings_degrees(gdf[centroid_col], gdf.geometry)
+    if gdf.crs is not None and gdf.crs.is_geographic:
+        msg = (
+            "calculate_bearing_from_centroid requires a projected CRS for planar bearings, "
+            f"but got geographic CRS: {gdf.crs}"
+        )
+        raise ValueError(msg)
+    gdf[bearing_col] = point_bearings_degrees(gdf[centroid_col], gdf.geometry)
     return gdf
 
 
@@ -313,8 +321,8 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
         f"After spatial join, mode_node_df type={type(mode_node_df)}:\n{mode_node_df}"
     )
 
-    # add angle fron centroid
-    mode_node_df = calculate_angle_from_centroid(
+    # add bearing from centroid
+    mode_node_df = calculate_bearing_from_centroid(
         mode_node_df, "geometry_centroid", "centroid_angle"
     )
     WranglerLogger.debug(
