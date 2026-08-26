@@ -1,9 +1,8 @@
-"""Functions to create centroid connectors.
+"""Functions to create centroid connector links between zone centroids and the roadway network.
 
 Example usage:
 
 ```python
-# zone_id_col is the name of the identifier column in zones_gdf.
 zones_table = prepare_zones_table(zones_gdf, zone_id_col="TAZ1454")
 add_centroid_nodes(road_net, zones_table)
 add_centroid_connectors(
@@ -18,22 +17,18 @@ See docs/how_to.md for a fuller end-to-end network creation workflow.
 """
 
 from enum import IntEnum
-from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Union
 
 import geopandas as gpd
-import networkx as nx
 import numpy as np
 import pandas as pd
 from pandera.typing import DataFrame
 import shapely.geometry
 
-from ..logger import WranglerLogger
-from ..models.roadway.tables import ZonesTable
-from ..params import LAT_LON_CRS, MODES_TO_NETWORK_LINK_VARIABLES
-from ..utils.geo import point_bearings_degrees
-from ..utils.models import validate_df_to_model
-from .network import RoadwayNetwork
+from ...logger import WranglerLogger
+from ...models.roadway.tables import ZonesTable
+from ...params import LAT_LON_CRS, MODES_TO_NETWORK_LINK_VARIABLES
+from ...utils.geo import point_bearings_degrees
+from ..network import RoadwayNetwork
 
 
 class FitForCentroidConnection(IntEnum):
@@ -50,61 +45,6 @@ class FitForCentroidConnection(IntEnum):
     GOOD = 2
     OKAY = 3
     DO_NOT_USE = 100
-
-
-def prepare_zones_table(
-    zones_gdf: gpd.GeoDataFrame,
-    zone_id_col: str,
-    metadata: dict[str, object] | None = None,
-) -> DataFrame[ZonesTable]:
-    """Create a validated zones table for centroid workflows.
-
-    Renames the user-specified ``zone_id_col`` to ``zone_id`` and
-    validates/coerces against ``ZonesTable``.
-
-    Metadata is preserved in ``attrs`` and can be augmented with ``metadata``.
-    The original zone-id source column name is stored as ``attrs['zone_id_col']``.
-    """
-    if zone_id_col not in zones_gdf.columns:
-        msg = f"zones_gdf is missing required zone id column: {zone_id_col}"
-        raise ValueError(msg)
-
-    normalized = zones_gdf.rename(columns={zone_id_col: "zone_id"}).copy()
-    zones_table = validate_df_to_model(normalized, ZonesTable)
-    zones_table.attrs.update(zones_gdf.attrs)
-    zones_table.attrs["zone_id_col"] = zone_id_col
-    if metadata:
-        zones_table.attrs.update(metadata)
-    return zones_table
-
-
-def zones_table_to_gdf(
-    zones_table: DataFrame[ZonesTable],
-    zone_id_col: str | None = None,
-) -> gpd.GeoDataFrame:
-    """Convert a validated ``ZonesTable`` back to a GeoDataFrame.
-
-    Args:
-        zones_table: validated zones table in canonical schema form.
-        zone_id_col: optional output name for the zone id column. If omitted,
-            uses ``zones_table.attrs['zone_id_col']`` when available; otherwise
-            defaults to ``zone_id``.
-
-    Returns:
-        GeoDataFrame with zone IDs renamed for the requested output shape and
-        metadata preserved in ``attrs``.
-    """
-    out_zone_id_col = zone_id_col or str(zones_table.attrs.get("zone_id_col", "zone_id"))
-    zones_gdf = gpd.GeoDataFrame(
-        zones_table.copy(),
-        geometry="geometry",
-        crs=getattr(zones_table, "crs", LAT_LON_CRS),
-    )
-    if out_zone_id_col != "zone_id":
-        zones_gdf = zones_gdf.rename(columns={"zone_id": out_zone_id_col})
-    zones_gdf.attrs.update(zones_table.attrs)
-    zones_gdf.attrs["zone_id_col"] = out_zone_id_col
-    return zones_gdf
 
 
 def calculate_bearing_from_centroid(
@@ -146,46 +86,6 @@ def calculate_bearing_from_centroid(
     return gdf
 
 
-def add_centroid_nodes(
-    road_net: RoadwayNetwork,
-    zones_table: DataFrame[ZonesTable],
-    default_node_attribute_dict: dict[str, any] | None = None,
-):
-    """Adds the given centroid nodes to the roadway network.
-
-    Args:
-        road_net: the RoadwayNetwork to update by adding centroids
-        zones_table: prepared zones table from ``prepare_zones_table`` with
-            polygon geometry in ``geometry`` and centroid point geometry in
-            ``geometry_centroid``.
-        default_node_attribute_dict: node attributes to set for the new centroid nodes.
-            Defaults to None.
-    """
-    zone_id_label = str(zones_table.attrs.get("zone_id_col", "zone_id"))
-
-    centroid_nodes_gdf = (
-        zones_table[["zone_id", "geometry_centroid"]]
-        .rename(columns={"geometry_centroid": "geometry", "zone_id": "model_node_id"})
-        .set_geometry("geometry", crs=LAT_LON_CRS)
-    )
-    centroid_nodes_gdf["X"] = centroid_nodes_gdf["geometry"].x
-    centroid_nodes_gdf["Y"] = centroid_nodes_gdf["geometry"].y
-    # Centroids are synthetic nodes, so do not assign fabricated OSM IDs.
-    centroid_nodes_gdf["osm_node_id"] = None
-
-    # set default node attributes
-    centroid_nodes_gdf = centroid_nodes_gdf.assign(**(default_node_attribute_dict or {}))
-
-    # assume the model_node_id
-    len_road_net_nodes = len(road_net.nodes_df)
-    WranglerLogger.debug(f"centroid_nodes_gdf:\n{centroid_nodes_gdf}")
-    road_net.add_nodes(centroid_nodes_gdf)
-    WranglerLogger.info(
-        f"Added node centroids for {zone_id_label}: "
-        f"increased size of nodes_df from {len_road_net_nodes:,} to {len(road_net.nodes_df):,}"
-    )
-
-
 def add_centroid_connectors(  # noqa: PLR0912, PLR0915
     road_net: RoadwayNetwork,
     zones_table: DataFrame[ZonesTable],
@@ -213,11 +113,8 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
             - Nodes with outgoing degree > max_mode_graph_degrees
 
         3. **Connector Selection** (per zone):
-            - First connector: Node with best fitness and closest to centroid
-            - Additional connectors: For each subsequent connector (up to num_centroid_connectors):
-                * Among nodes with the best available fitness level
-                * Select the one with maximum angular separation from existing connectors
-                * This ensures spatial distribution while prioritizing network suitability
+            - Divide the bearing circle into ``num_centroid_connectors`` equal sectors.
+            - Pick the best-fit, closest node per (zone, sector).
 
         4. **Link Creation**: Creates bidirectional links between zone centroid and selected nodes
 
@@ -326,17 +223,17 @@ def add_centroid_connectors(  # noqa: PLR0912, PLR0915
         candidate_nodes_df, "geometry_centroid", "centroid_angle"
     )
     WranglerLogger.debug(
-        f"After adding angle from centroid, candidate_nodes_df type={type(candidate_nodes_df)}:\n{candidate_nodes_df}"
+        f"After adding bearing from centroid, candidate_nodes_df type={type(candidate_nodes_df)}:\n{candidate_nodes_df}"
     )
 
     # Filter to nodes within the given zones
     candidate_nodes_df = candidate_nodes_df.loc[candidate_nodes_df["zone_id"].notna()]
-    # and mode_graph_degress <= max_mode_graph_degress
+    # and mode_graph_degrees <= max_mode_graph_degrees
     candidate_nodes_df = candidate_nodes_df.loc[
         candidate_nodes_df[f"{mode}_graph_degrees"] <= max_mode_graph_degrees
     ]
 
-    # sort by drive_centroid_fit, centroid_angle
+    # sort by fit_col, distance_from_centroid
     candidate_nodes_df.sort_values(
         by=["zone_id", fit_col, "distance_from_centroid"], inplace=True
     )

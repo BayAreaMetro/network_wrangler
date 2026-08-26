@@ -10,11 +10,13 @@ import pytest
 from shapely.geometry import Point
 
 from network_wrangler import load_roadway_from_dir
-from network_wrangler.roadway.centroids import (
+from network_wrangler.roadway.links.connectors import (
     FitForCentroidConnection,
     add_centroid_connectors,
-    add_centroid_nodes,
     calculate_bearing_from_centroid,
+)
+from network_wrangler.roadway.nodes.centroids import (
+    add_centroid_nodes,
     prepare_zones_table,
     zones_table_to_gdf,
 )

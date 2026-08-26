@@ -48,7 +48,7 @@
           show_classes: false
           show_functions: false
 
-## Review changes beetween networks
+## Review changes between networks
 
 !!! example "Review Added Managed Lanes"
 
@@ -156,18 +156,18 @@ road_net = nw.load_roadway_from_dataframes(
 )
 ```
 
-Before adding centroids, apply any additional enrichment to the network: setting facility types, managed lane fields, controlled-access highway flags, bridge toll link attributes, and per-link `{mode}_centroid_fit` values (see [`FitForCentroidConnection`](api_roadway.md#network_wrangler.roadway.centroids.FitForCentroidConnection)).
+Before adding centroids, apply any additional enrichment to the network: setting facility types, managed lane fields, controlled-access highway flags, bridge toll link attributes, and per-link `{mode}_centroid_fit` values (see [`FitForCentroidConnection`](api_roadway.md#network_wrangler.roadway.links.connectors.FitForCentroidConnection)).
 
 **Step 4: Add zone centroids and connectors**
 
-Add zone centroid nodes and create connector links using [`add_centroid_nodes()`](api_roadway.md#network_wrangler.roadway.centroids.add_centroid_nodes) and [`add_centroid_connectors()`](api_roadway.md#network_wrangler.roadway.centroids.add_centroid_connectors).
+Add zone centroid nodes and create connector links using [`add_centroid_nodes()`](api_roadway.md#network_wrangler.roadway.nodes.centroids.add_centroid_nodes) and [`add_centroid_connectors()`](api_roadway.md#network_wrangler.roadway.links.connectors.add_centroid_connectors).
 
 ```python
-from network_wrangler.roadway.centroids import (
+from network_wrangler.roadway.nodes.centroids import (
     prepare_zones_table,
     add_centroid_nodes,
-    add_centroid_connectors,
 )
+from network_wrangler.roadway.links.connectors import add_centroid_connectors
 
 # TAZ connectors
 taz_zones_table = prepare_zones_table(taz_zones_gdf, zone_id_col="TAZ1454")
@@ -181,7 +181,7 @@ add_centroid_connectors(
 )
 ```
 
-The connector selection algorithm first picks the node with the best fitness and shortest distance, then selects each additional connector to maximize angular separation from already-selected ones, ensuring good spatial distribution around the centroid.
+The connector selection algorithm divides the 360° bearing circle around each centroid into equal sectors (one per requested connector) and picks the best-fit, closest node within each sector, ensuring good spatial distribution around the centroid.
 
 **Step 5: Prepare GTFS transit data**
 
