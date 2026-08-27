@@ -10,6 +10,8 @@ add_centroid_nodes(road_net, zones_table)
 See docs/how_to.md for a fuller end-to-end network creation workflow.
 """
 
+from typing import Any
+
 import geopandas as gpd
 from pandera.typing import DataFrame
 
@@ -78,7 +80,7 @@ def zones_table_to_gdf(
 def add_centroid_nodes(
     road_net: RoadwayNetwork,
     zones_table: DataFrame[ZonesTable],
-    default_node_attribute_dict: dict[str, any] | None = None,
+    default_node_attribute_dict: dict[str, Any] | None = None,
 ):
     """Adds the given centroid nodes to the roadway network.
 

@@ -101,7 +101,7 @@ def test_add_centroid_connectors(centroid_net, zones_gdf):
         default_link_attribute_dict={"lanes": 1},
     )
 
-    per_zone = dict(zip(summary["zone_id"], summary["num_connectors"]))
+    per_zone = dict(zip(summary["zone_id"], summary["num_connectors"], strict=False))
     assert per_zone == {1001: num_connectors, 1002: num_connectors}
 
     n_added = len(centroid_net.links_df) - n_links_before

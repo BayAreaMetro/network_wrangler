@@ -17,6 +17,7 @@ See docs/how_to.md for a fuller end-to-end network creation workflow.
 """
 
 from enum import IntEnum
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
@@ -257,7 +258,9 @@ def _build_connector_links_df(
     links_taz_to_node_df["geometry"] = [
         shapely.geometry.LineString([c, g])
         for c, g in zip(
-            links_taz_to_node_df["geometry_centroid"], links_taz_to_node_df["geometry"]
+            links_taz_to_node_df["geometry_centroid"],
+            links_taz_to_node_df["geometry"],
+            strict=True,
         )
     ]
 
@@ -270,7 +273,9 @@ def _build_connector_links_df(
     links_node_to_taz_df["geometry"] = [
         shapely.geometry.LineString([g, c])
         for g, c in zip(
-            links_node_to_taz_df["geometry"], links_node_to_taz_df["geometry_centroid"]
+            links_node_to_taz_df["geometry"],
+            links_node_to_taz_df["geometry_centroid"],
+            strict=True,
         )
     ]
 
@@ -289,7 +294,7 @@ def add_centroid_connectors(
     zone_buffer_distance: int,
     num_centroid_connectors: int,
     max_mode_graph_degrees: int,
-    default_link_attribute_dict: dict[str, any] | None = None,
+    default_link_attribute_dict: dict[str, Any] | None = None,
 ) -> gpd.GeoDataFrame:
     """Creates centroid connector links between zone centroids and roadway network nodes.
 

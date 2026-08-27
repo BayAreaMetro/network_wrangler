@@ -212,7 +212,7 @@ def _restore_geometry_columns(
     return df
 
 
-def write_table(
+def write_table(  # noqa: PLR0912
     df: pd.DataFrame | gpd.GeoDataFrame,
     filename: Path,
     overwrite: bool = False,

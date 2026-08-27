@@ -28,6 +28,9 @@ jobs:
       # the result. Auto-committing from CI with GITHUB_TOKEN suppresses the
       # follow-up workflow run (GitHub's anti-recursion policy), which leaves
       # the auto-fix commit untested in the PR UI.
+      # Pin the ruff version to match .pre-commit-config.yaml. `uvx ruff`
+      # (unpinned) grabs the latest release, so a new ruff can start failing
+      # unchanged code the moment it's published. Keep both in sync.
       - name: Check formatting
         run: uvx ruff==0.16.4 format --check network_wrangler
 
