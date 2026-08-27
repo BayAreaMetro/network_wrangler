@@ -79,7 +79,10 @@ Submodules which define and extend the links, nodes, and shapes dataframe object
 ::: network_wrangler.roadway.nodes.centroids
     options:
         heading_level: 3
-        members: true
+        members:
+          - prepare_zones_table
+          - zones_table_to_gdf
+          - add_centroid_nodes
         show_attributes: true
         show_if_no_docstring: true
 
@@ -88,7 +91,10 @@ Submodules which define and extend the links, nodes, and shapes dataframe object
 ::: network_wrangler.roadway.links.connectors
     options:
         heading_level: 3
-        members: true
+        members:
+          - FitForCentroidConnection
+          - calculate_bearing_from_centroid
+          - add_centroid_connectors
         show_attributes: true
         show_if_no_docstring: true
 
