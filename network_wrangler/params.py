@@ -21,7 +21,7 @@ DEFAULT_CATEGORY: str = "any"
 
 DEFAULT_SEARCH_MODES: list = ["drive"]
 """
-This is a logical choice because you typically don't want a segment search from A--> F 
+This is a logical choice because you typically don't want a segment search from A--> F
 that includes b,c,d,e (walk nodes) and B,C,D,E (drive modes) to mix and match.
 """
 

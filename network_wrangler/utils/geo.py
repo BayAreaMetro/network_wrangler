@@ -664,9 +664,7 @@ def get_link_bearings_degrees(geometry: gpd.GeoSeries) -> pd.Series:
     return pd.Series(bearings, index=geometry.index)
 
 
-def point_bearings_degrees(
-    from_points: gpd.GeoSeries, to_points: gpd.GeoSeries
-) -> np.ndarray:
+def point_bearings_degrees(from_points: gpd.GeoSeries, to_points: gpd.GeoSeries) -> np.ndarray:
     """Calculate the planar bearing from each ``from`` point to each ``to`` point.
 
     Vectorized over two aligned sequences of point geometries. The bearing is measured
@@ -687,9 +685,7 @@ def point_bearings_degrees(
     return (90.0 - np.degrees(np.arctan2(dy, dx))) % 360.0
 
 
-def bearings_to_cardinal_directions(
-    bearings: pd.Series, cardinal_only: bool = False
-) -> pd.Series:
+def bearings_to_cardinal_directions(bearings: pd.Series, cardinal_only: bool = False) -> pd.Series:
     """Convert a Series of bearings in degrees to cardinal/intercardinal directions.
 
     Vectorized over a Series of bearings.
@@ -746,8 +742,6 @@ def add_direction_to_links(links_df: pd.DataFrame, cardinal_only: bool = False) 
 
     # Calculate bearings for all links, then convert to cardinal directions (vectorized)
     bearings = get_link_bearings_degrees(result_df["geometry"])
-    result_df["direction"] = bearings_to_cardinal_directions(
-        bearings, cardinal_only=cardinal_only
-    )
+    result_df["direction"] = bearings_to_cardinal_directions(bearings, cardinal_only=cardinal_only)
 
     return result_df

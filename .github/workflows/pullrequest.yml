@@ -162,7 +162,7 @@ jobs:
             const branchSlug = '${{ steps.branch.outputs.branch-slug }}';
             const docsUrl = `https://network-wrangler.github.io/network_wrangler/${branchSlug}/`;
             const comment = `📚 Documentation has been built and deployed!\n\nView the docs for this PR: [${docsUrl}](${docsUrl})`;
-            
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,

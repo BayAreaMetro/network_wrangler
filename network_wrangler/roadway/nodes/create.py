@@ -174,9 +174,9 @@ def _merge_duplicate_nodes_by_average(
     # Use WEB_MERCATOR_CRS only to measure approximate planar spread in meters
     # for a warning heuristic. It is globally available and avoids requiring a
     # region-specific local CRS in this low-stakes diagnostic path.
-    dupes_projected = gpd.GeoDataFrame(duplicate_nodes, geometry="geometry", crs=LAT_LON_CRS).to_crs(
-        WEB_MERCATOR_CRS
-    )
+    dupes_projected = gpd.GeoDataFrame(
+        duplicate_nodes, geometry="geometry", crs=LAT_LON_CRS
+    ).to_crs(WEB_MERCATOR_CRS)
     dupes_projected["x_m"] = dupes_projected.geometry.x
     dupes_projected["y_m"] = dupes_projected.geometry.y
 

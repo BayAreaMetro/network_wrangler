@@ -125,6 +125,7 @@ def _coerce_nested_object_columns_for_parquet(
             continue
 
         if sample.apply(lambda v: isinstance(v, (list, tuple, dict, set))).any():
+
             def _to_json_if_nested(v):
                 if isinstance(v, set):
                     v = list(v)
@@ -245,7 +246,9 @@ def write_table(
             df.to_parquet(filename, index=False, **kwargs)
         except Exception as e:
             # Fallback for Arrow failures on object columns with nested list/dict payloads.
-            if "Conversion failed for column" in str(e) or "Expected bytes, got a 'list' object" in str(e):
+            if "Conversion failed for column" in str(
+                e
+            ) or "Expected bytes, got a 'list' object" in str(e):
                 safe_df, coerced_cols = _coerce_nested_object_columns_for_parquet(df)
                 if coerced_cols:
                     WranglerLogger.warning(

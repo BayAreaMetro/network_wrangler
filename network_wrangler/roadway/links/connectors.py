@@ -21,8 +21,8 @@ from enum import IntEnum
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-from pandera.typing import DataFrame
 import shapely.geometry
+from pandera.typing import DataFrame
 
 from ...logger import WranglerLogger
 from ...models.roadway.tables import ZonesTable
@@ -118,9 +118,7 @@ def _score_and_filter_candidate_nodes(
 
     # Score each node: out-degree and worst fit among its modal out-links.
     modal_links_df = road_net.links_df.mode_query(mode)
-    scores_df = modal_links_df.groupby("A")[fit_col].agg(
-        **{degrees_col: "size", fit_col: "max"}
-    )
+    scores_df = modal_links_df.groupby("A")[fit_col].agg(**{degrees_col: "size", fit_col: "max"})
     scores_df = scores_df[scores_df[fit_col] != FitForCentroidConnection.DO_NOT_USE]
 
     candidate_nodes_df = gpd.GeoDataFrame(
@@ -173,9 +171,7 @@ def _score_and_filter_candidate_nodes(
     candidate_nodes_df = candidate_nodes_df.loc[
         candidate_nodes_df[degrees_col] <= max_mode_graph_degrees
     ]
-    candidate_nodes_df.sort_values(
-        by=["zone_id", fit_col, "distance_from_centroid"], inplace=True
-    )
+    candidate_nodes_df.sort_values(by=["zone_id", fit_col, "distance_from_centroid"], inplace=True)
     candidate_nodes_df.reset_index(drop=True, inplace=True)
 
     WranglerLogger.debug(

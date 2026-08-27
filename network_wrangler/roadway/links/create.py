@@ -58,7 +58,9 @@ def _prepare_ml_geometry_for_validation(
         needs_coercion = ml[non_null].map(lambda v: isinstance(v, (dict, str)))
         if needs_coercion.any():
             idx = needs_coercion[needs_coercion].index
-            links_df.loc[idx, "ML_geometry"] = links_df.loc[idx, "ML_geometry"].map(_coerce_to_shapely)
+            links_df.loc[idx, "ML_geometry"] = links_df.loc[idx, "ML_geometry"].map(
+                _coerce_to_shapely
+            )
 
         ml_non_null = links_df.loc[non_null, "ML_geometry"]
         ml_multi_mask = ml_non_null.map(lambda g: isinstance(g, MultiLineString))
