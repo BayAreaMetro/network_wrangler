@@ -410,7 +410,7 @@ class ZonesTable(DataFrameModel):
         geometry_centroid (GeoSeries): Point geometry representing the zone centroid.
 
     !!! TODO
-        Add and instance of this as an attribute of
+        Add an instance of this as an attribute of
         [`ModelRoadwayNetwork`][network_wrangler.roadway.model_roadway.ModelRoadwayNetwork]
         so that zone geometry is carried through alongside the model links/nodes rather than
         managed separately by the caller?
