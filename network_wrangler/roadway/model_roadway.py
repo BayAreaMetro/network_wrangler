@@ -611,8 +611,13 @@ def _create_ml_nodes_from_links(
         gp_nodes_df: General purpose nodes dataframe to copy attributes from.
         copy_from_gp_node_to_ml: List of node attribute names to copy from GP to ML nodes.
     """
-    a_nodes_df = _create_nodes_from_link(ml_links_df.of_type.managed, 0, "A")
-    b_nodes_df = _create_nodes_from_link(ml_links_df.of_type.managed, -1, "B")
+    # Multiple managed-lane links legitimately share endpoint nodes, so merge duplicates.
+    a_nodes_df = _create_nodes_from_link(
+        ml_links_df.of_type.managed, 0, "A", merge_duplicates=True
+    )
+    b_nodes_df = _create_nodes_from_link(
+        ml_links_df.of_type.managed, -1, "B", merge_duplicates=True
+    )
     ml_nodes_df = a_nodes_df.combine_first(b_nodes_df)
 
     # ml_node_id_lookup maps GP to ML node, we want the reverse
