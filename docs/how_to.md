@@ -178,6 +178,7 @@ add_centroid_connectors(
     zone_buffer_distance=20,    # units of local_crs — search radius beyond zone boundary
     num_centroid_connectors=4,  # max connectors per zone
     max_mode_graph_degrees=4,   # exclude high-degree nodes (e.g. motorway ramps)
+    default_link_attribute_dict={"lanes": 1},  # required: RoadLinksTable has no lanes default
 )
 ```
 

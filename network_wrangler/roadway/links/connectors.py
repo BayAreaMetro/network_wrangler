@@ -10,6 +10,10 @@ add_centroid_connectors(
     zones_table,
     mode="drive",
     local_crs="EPSG:26915",
+    zone_buffer_distance=20,
+    num_centroid_connectors=4,
+    max_mode_graph_degrees=4,
+    default_link_attribute_dict={"lanes": 1},
 )
 ```
 
@@ -25,6 +29,7 @@ import pandas as pd
 import shapely.geometry
 from pandera.typing import DataFrame
 
+from ...errors import LinkAddError
 from ...logger import WranglerLogger
 from ...models.roadway.tables import ZonesTable
 from ...params import LAT_LON_CRS, MODES_TO_NETWORK_LINK_VARIABLES
@@ -294,7 +299,7 @@ def add_centroid_connectors(
     zone_buffer_distance: int,
     num_centroid_connectors: int,
     max_mode_graph_degrees: int,
-    default_link_attribute_dict: dict[str, Any] | None = None,
+    default_link_attribute_dict: dict[str, Any],
 ) -> gpd.GeoDataFrame:
     """Creates centroid connector links between zone centroids and roadway network nodes.
 
@@ -345,13 +350,21 @@ def add_centroid_connectors(
         num_centroid_connectors: maximum number of centroid connectors per zone
         max_mode_graph_degrees: maximum outgoing degree for a node to be eligible
         default_link_attribute_dict: link attributes to set for the new centroid connector links.
-            Defaults to None.
+            Must include ``lanes``, since ``RoadLinksTable`` requires a non-null value and
+            centroid connectors have no natural default lane count.
 
     Returns:
         A copy of zones_table with an additional column, `num_connectors`. The road_net is
             updated in place with new centroid connector links, and the nodes table has an
             additional column: `{zone_id_col}_num_connectors`.
     """
+    if not default_link_attribute_dict or "lanes" not in default_link_attribute_dict:
+        msg = (
+            "default_link_attribute_dict must include a 'lanes' value: RoadLinksTable requires "
+            "a non-null lanes value and centroid connectors have no natural default."
+        )
+        raise LinkAddError(msg)
+
     zone_id_label = str(zones_table.attrs.get("zone_id_col", "zone_id"))
     fit_col = f"{mode}_centroid_fit"
 
@@ -381,7 +394,7 @@ def add_centroid_connectors(
     if "highway" in road_net.links_df.columns:
         centroid_links_df["highway"] = zone_id_label
 
-    for colname, default_value in (default_link_attribute_dict or {}).items():
+    for colname, default_value in default_link_attribute_dict.items():
         centroid_links_df[colname] = default_value
 
     road_net.add_links(centroid_links_df)
