@@ -402,13 +402,14 @@ def add_centroid_connectors(
         f"{summary_df['num_connectors'].value_counts()}"
     )
 
-    road_net.nodes_df = pd.merge(
-        left=road_net.nodes_df,
-        right=summary_df[["zone_id", "num_connectors"]].rename(
-            columns={"zone_id": "model_node_id", "num_connectors": "zone_id_num_connectors"}
-        ),
-        how="left",
-        validate="one_to_one",
+    # Attach the per-zone count to the centroid nodes. Use .map() rather than pd.merge()
+    # so that nodes_df keeps its `model_node_id_idx` primary-key index and its attrs.
+    num_connectors_col = f"{zone_id_label}_num_connectors"
+    road_net.nodes_df[num_connectors_col] = (
+        road_net.nodes_df["model_node_id"]
+        .map(summary_df.set_index("zone_id")["num_connectors"])
+        .astype("Int64")
     )
+    road_net._mark_modified()
     WranglerLogger.debug(f"road_net.nodes_df:\n{road_net.nodes_df}")
     return summary_df
