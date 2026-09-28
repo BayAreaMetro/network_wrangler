@@ -155,8 +155,9 @@ def _merge_duplicate_nodes_by_average(
 ) -> gpd.GeoDataFrame:
     """Merge duplicate model_node_id rows by averaging coordinates.
 
-    Logs a warning when duplicate geometries for the same model_node_id are spatially
-    far apart, which may indicate an input-network issue.
+    Raises if duplicate geometries for the same model_node_id are spatially far apart,
+    since that almost always indicates an input-network issue rather than an
+    intentional near-duplicate.
     """
     # Keep this as a local threshold for now; if users need to tune it, we can
     # promote it to WranglerConfig (e.g., MODEL_ROADWAY) in a follow-up change.
@@ -165,9 +166,10 @@ def _merge_duplicate_nodes_by_average(
     if len(duplicate_nodes) == 0:
         return gpd.GeoDataFrame(nodes_df, geometry="geometry", crs=LAT_LON_CRS)
 
-    WranglerLogger.debug(
+    WranglerLogger.warning(
         f"Found {len(duplicate_nodes)} duplicate node entries for "
-        f"{duplicate_nodes['model_node_id'].nunique()} unique node IDs"
+        f"{duplicate_nodes['model_node_id'].nunique()} unique node IDs. Averaging their "
+        "coordinates because merge_duplicates=True."
     )
     WranglerLogger.debug(f"Duplicate nodes:\n{duplicate_nodes[['model_node_id', 'X', 'Y']]}")
 
@@ -187,11 +189,13 @@ def _merge_duplicate_nodes_by_average(
     )
     wide_spread = spread_by_id[spread_by_id > DUPLICATE_NODE_WARN_SPREAD_METERS]
     if not wide_spread.empty:
-        WranglerLogger.warning(
-            "Merging duplicate model_node_id geometries with large spatial spread "
-            f"(>{DUPLICATE_NODE_WARN_SPREAD_METERS:.1f} m) for {len(wide_spread)} nodes. "
+        msg = (
+            "Refusing to merge duplicate model_node_id geometries with large spatial spread "
+            f"(>{DUPLICATE_NODE_WARN_SPREAD_METERS:.1f} m) for {len(wide_spread)} nodes, "
+            "which almost certainly indicates an upstream data error. "
             f"Largest spreads (m): {wide_spread.sort_values(ascending=False).head(10).to_dict()}"
         )
+        raise NodeAddError(msg)
 
     merged = nodes_df.groupby("model_node_id", as_index=False).agg({"X": "mean", "Y": "mean"})
     merged["geometry"] = merged.apply(lambda row: point_from_xy(row["X"], row["Y"]), axis=1)
