@@ -118,18 +118,71 @@ def test_add_centroid_connectors(centroid_net, zones_gdf):
         assert set(outbound["B"]) == set(inbound["A"])
 
 
+def test_add_centroid_connectors_two_zone_types(centroid_net, zones_gdf):
+    """Adding a second zone type (e.g. MAZs after TAZs) never connects centroid to centroid."""
+    taz_table = prepare_zones_table(zones_gdf, zone_id_col="TAZ")
+    add_centroid_nodes(centroid_net, taz_table)
+    add_centroid_connectors(
+        centroid_net,
+        taz_table.copy(),
+        mode="drive",
+        local_crs=LOCAL_CRS,
+        zone_buffer_distance=50,
+        num_centroid_connectors=2,
+        max_mode_graph_degrees=6,
+        default_link_attribute_dict={"lanes": 1},
+    )
+    taz_ids = set(zones_gdf["TAZ"])
+
+    # non-overlapping id space, same geography, so MAZ candidates could otherwise
+    # spatially include the just-created TAZ centroids
+    maz_gdf = zones_gdf.copy()
+    maz_gdf["MAZ"] = maz_gdf["TAZ"] + 1000
+    maz_table = prepare_zones_table(maz_gdf, zone_id_col="MAZ")
+    add_centroid_nodes(centroid_net, maz_table)
+    n_links_before = len(centroid_net.links_df)
+
+    summary = add_centroid_connectors(
+        centroid_net,
+        maz_table.copy(),
+        mode="drive",
+        local_crs=LOCAL_CRS,
+        zone_buffer_distance=50,
+        num_centroid_connectors=2,
+        max_mode_graph_degrees=6,
+        default_link_attribute_dict={"lanes": 1},
+    )
+    assert (summary["num_connectors"] > 0).all()
+
+    new_links = centroid_net.links_df.tail(len(centroid_net.links_df) - n_links_before)
+    assert not (new_links["A"].isin(taz_ids) | new_links["B"].isin(taz_ids)).any()
+
+    # the second (MAZ) pass must not wipe out the first (TAZ) pass's counts
+    taz_counts = centroid_net.nodes_df.loc[
+        centroid_net.nodes_df["model_node_id"].isin(taz_ids), "zone_num_connectors"
+    ]
+    assert (taz_counts == 2).all()
+    maz_ids = set(maz_gdf["MAZ"])
+    maz_counts = centroid_net.nodes_df.loc[
+        centroid_net.nodes_df["model_node_id"].isin(maz_ids), "zone_num_connectors"
+    ]
+    assert (maz_counts == 2).all()
+
+
 def test_zones_table_roundtrip_with_metadata(zones_gdf):
-    """Zones table conversion preserves metadata and restores requested ID column name."""
+    """Zones table conversion preserves metadata and can rename the ID column on request."""
     zones_table = prepare_zones_table(
         zones_gdf,
         zone_id_col="TAZ",
         metadata={"zone_name": "TAZ"},
     )
 
-    assert zones_table.attrs["zone_id_col"] == "TAZ"
     assert zones_table.attrs["zone_name"] == "TAZ"
 
-    roundtrip = zones_table_to_gdf(zones_table)
+    unrenamed = zones_table_to_gdf(zones_table)
+    assert "zone_id" in unrenamed.columns
+
+    roundtrip = zones_table_to_gdf(zones_table, zone_id_col="TAZ")
     assert "TAZ" in roundtrip.columns
     assert "zone_id" not in roundtrip.columns
     assert roundtrip.attrs["zone_name"] == "TAZ"

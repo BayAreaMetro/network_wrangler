@@ -30,19 +30,19 @@ def prepare_zones_table(
     """Create a validated zones table for centroid workflows.
 
     Renames the user-specified ``zone_id_col`` to ``zone_id`` and
-    validates/coerces against ``ZonesTable``.
+    validates/coerces against ``ZonesTable``. Downstream centroid code works
+    exclusively with this canonical ``zone_id`` column.
 
     Metadata is preserved in ``attrs`` and can be augmented with ``metadata``.
-    The original zone-id source column name is stored as ``attrs['zone_id_col']``.
     """
     if zone_id_col not in zones_gdf.columns:
         msg = f"zones_gdf is missing required zone id column: {zone_id_col}"
         raise ValueError(msg)
 
-    normalized = zones_gdf.rename(columns={zone_id_col: "zone_id"}).copy()
-    zones_table = validate_df_to_model(normalized, ZonesTable)
+    zones_table = validate_df_to_model(
+        zones_gdf.rename(columns={zone_id_col: "zone_id"}), ZonesTable
+    )
     zones_table.attrs.update(zones_gdf.attrs)
-    zones_table.attrs["zone_id_col"] = zone_id_col
     if metadata:
         zones_table.attrs.update(metadata)
     return zones_table
@@ -56,24 +56,20 @@ def zones_table_to_gdf(
 
     Args:
         zones_table: validated zones table in canonical schema form.
-        zone_id_col: optional output name for the zone id column. If omitted,
-            uses ``zones_table.attrs['zone_id_col']`` when available; otherwise
-            defaults to ``zone_id``.
+        zone_id_col: optional name to rename the ``zone_id`` column to on output.
+            If omitted, the column stays named ``zone_id``.
 
     Returns:
-        GeoDataFrame with zone IDs renamed for the requested output shape and
-        metadata preserved in ``attrs``.
+        GeoDataFrame with zone IDs optionally renamed and metadata preserved in ``attrs``.
     """
-    out_zone_id_col = zone_id_col or str(zones_table.attrs.get("zone_id_col", "zone_id"))
     zones_gdf = gpd.GeoDataFrame(
         zones_table.copy(),
         geometry="geometry",
         crs=getattr(zones_table, "crs", LAT_LON_CRS),
     )
-    if out_zone_id_col != "zone_id":
-        zones_gdf = zones_gdf.rename(columns={"zone_id": out_zone_id_col})
+    if zone_id_col and zone_id_col != "zone_id":
+        zones_gdf = zones_gdf.rename(columns={"zone_id": zone_id_col})
     zones_gdf.attrs.update(zones_table.attrs)
-    zones_gdf.attrs["zone_id_col"] = out_zone_id_col
     return zones_gdf
 
 
@@ -92,8 +88,6 @@ def add_centroid_nodes(
         default_node_attribute_dict: node attributes to set for the new centroid nodes.
             Defaults to None.
     """
-    zone_id_label = str(zones_table.attrs.get("zone_id_col", "zone_id"))
-
     centroid_nodes_gdf = (
         zones_table[["zone_id", "geometry_centroid"]]
         .rename(columns={"geometry_centroid": "geometry", "zone_id": "model_node_id"})
@@ -111,6 +105,6 @@ def add_centroid_nodes(
     WranglerLogger.debug(f"centroid_nodes_gdf:\n{centroid_nodes_gdf}")
     road_net.add_nodes(centroid_nodes_gdf)
     WranglerLogger.info(
-        f"Added node centroids for {zone_id_label}: "
+        f"Added {len(zones_table):,} centroid nodes: "
         f"increased size of nodes_df from {len_road_net_nodes:,} to {len(road_net.nodes_df):,}"
     )

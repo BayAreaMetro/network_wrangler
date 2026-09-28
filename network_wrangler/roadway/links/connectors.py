@@ -123,7 +123,11 @@ def _score_and_filter_candidate_nodes(
     fit_col = f"{mode}_centroid_fit"
 
     # Score each node: out-degree and worst fit among its modal out-links.
+    # Exclude links with no {mode}_centroid_fit set (e.g. centroid connectors created by a
+    # prior call for a different zone type) so they don't inflate degree/fit for this pass,
+    # and so previously-created centroid nodes can't leak in as candidates here.
     modal_links_df = road_net.links_df.mode_query(mode)
+    modal_links_df = modal_links_df.loc[modal_links_df[fit_col].notna()]
     scores_df = modal_links_df.groupby("A")[fit_col].agg(**{degrees_col: "size", fit_col: "max"})
     scores_df = scores_df[scores_df[fit_col] != FitForCentroidConnection.DO_NOT_USE]
 
@@ -190,7 +194,6 @@ def _select_nodes_by_sector(
     candidate_nodes_df: gpd.GeoDataFrame,
     num_centroid_connectors: int,
     fit_col: str,
-    zone_id_label: str,
     zones_table: DataFrame[ZonesTable],
 ) -> gpd.GeoDataFrame:
     """Select up to ``num_centroid_connectors`` nodes per zone using sector-based distribution.
@@ -203,7 +206,6 @@ def _select_nodes_by_sector(
             (output of :func:`_score_and_filter_candidate_nodes`).
         num_centroid_connectors: Maximum connectors (and sectors) per zone.
         fit_col: Column name containing the fitness score (e.g. ``drive_centroid_fit``).
-        zone_id_label: Human-readable zone identifier name used for log messages.
         zones_table: Validated zones table; used only to warn about zones with no candidates.
 
     Returns:
@@ -227,11 +229,10 @@ def _select_nodes_by_sector(
     zones_with_connectors = set(selected_nodes_df["zone_id"])
     for _zone_id in zones_table["zone_id"]:
         if _zone_id not in zones_with_connectors:
-            WranglerLogger.warning(f"No centroid connectors for {zone_id_label} {_zone_id}")
+            WranglerLogger.warning(f"No centroid connectors for zone_id {_zone_id}")
 
     WranglerLogger.info(
-        f"Selected {len(selected_nodes_df):,} centroid connectors "
-        f"for {len(zones_table):,} {zone_id_label}s"
+        f"Selected {len(selected_nodes_df):,} centroid connectors for {len(zones_table):,} zones"
     )
     WranglerLogger.debug(f"selected_nodes_df:\n{selected_nodes_df}")
     return selected_nodes_df
@@ -239,7 +240,6 @@ def _select_nodes_by_sector(
 
 def _build_connector_links_df(
     selected_nodes_df: gpd.GeoDataFrame,
-    zone_id_label: str,
 ) -> pd.DataFrame:
     """Build a DataFrame of bidirectional centroid connector link geometries.
 
@@ -249,7 +249,6 @@ def _build_connector_links_df(
     Args:
         selected_nodes_df: Selected connector nodes
             (output of :func:`_select_nodes_by_sector`).
-        zone_id_label: Human-readable zone identifier name used for link ``name`` values.
 
     Returns:
         DataFrame with columns: ``A``, ``B``, ``name``, ``length``, ``geometry``.
@@ -259,7 +258,7 @@ def _build_connector_links_df(
         columns={"zone_id": "A", "model_node_id": "B", "distance_from_centroid": "length"},
         inplace=True,
     )
-    links_taz_to_node_df["name"] = f"{zone_id_label} to node"
+    links_taz_to_node_df["name"] = "zone to node"
     links_taz_to_node_df["geometry"] = [
         shapely.geometry.LineString([c, g])
         for c, g in zip(
@@ -274,7 +273,7 @@ def _build_connector_links_df(
         columns={"model_node_id": "A", "zone_id": "B", "distance_from_centroid": "length"},
         inplace=True,
     )
-    links_node_to_taz_df["name"] = f"node to {zone_id_label}"
+    links_node_to_taz_df["name"] = "node to zone"
     links_node_to_taz_df["geometry"] = [
         shapely.geometry.LineString([g, c])
         for g, c in zip(
@@ -326,10 +325,10 @@ def add_centroid_connectors(
     Centroid Connector Link Attributes:
         - **model_link_id**: Auto-incremented from max existing link ID
         - **A, B**: Origin and destination node IDs (bidirectional, so both directions created)
-        - **name**: Set to "node to {zone_id}" or "{zone_id} to node"
+        - **name**: Set to "node to zone" or "zone to node"
         - **length**: Euclidean distance between centroid and node (in local_crs units)
         - **geometry**: LineString from origin to destination
-        - **highway**: Set to zone_id value (if highway column exists in network)
+        - **highway**: Set to "centroid_connector" (if highway column exists in network)
         - **Mode access variables**:
             * All mode variables set to False by default
             * Variables for specified mode set to True (from MODES_TO_NETWORK_LINK_VARIABLES)
@@ -356,7 +355,7 @@ def add_centroid_connectors(
     Returns:
         A copy of zones_table with an additional column, `num_connectors`. The road_net is
             updated in place with new centroid connector links, and the nodes table has an
-            additional column: `{zone_id_col}_num_connectors`.
+            additional column: `zone_num_connectors`.
     """
     if not default_link_attribute_dict or "lanes" not in default_link_attribute_dict:
         msg = (
@@ -365,19 +364,20 @@ def add_centroid_connectors(
         )
         raise LinkAddError(msg)
 
-    zone_id_label = str(zones_table.attrs.get("zone_id_col", "zone_id"))
     fit_col = f"{mode}_centroid_fit"
 
-    WranglerLogger.info(f"Adding centroid connectors for zone:{zone_id_label} and mode:{mode}")
+    WranglerLogger.info(
+        f"Adding centroid connectors for {len(zones_table):,} zones and mode:{mode}"
+    )
     WranglerLogger.debug(f"zones_table:\n{zones_table}")
 
     candidate_nodes_df = _score_and_filter_candidate_nodes(
         road_net, mode, local_crs, zones_table, zone_buffer_distance, max_mode_graph_degrees
     )
     selected_nodes_df = _select_nodes_by_sector(
-        candidate_nodes_df, num_centroid_connectors, fit_col, zone_id_label, zones_table
+        candidate_nodes_df, num_centroid_connectors, fit_col, zones_table
     )
-    centroid_links_df = _build_connector_links_df(selected_nodes_df, zone_id_label)
+    centroid_links_df = _build_connector_links_df(selected_nodes_df)
 
     # Assign link IDs and mode access variables.
     max_model_link_id = road_net.links_df.model_link_id.max()
@@ -392,7 +392,7 @@ def add_centroid_connectors(
         centroid_links_df[link_var] = True
 
     if "highway" in road_net.links_df.columns:
-        centroid_links_df["highway"] = zone_id_label
+        centroid_links_df["highway"] = "centroid_connector"
 
     for colname, default_value in default_link_attribute_dict.items():
         centroid_links_df[colname] = default_value
@@ -411,18 +411,25 @@ def add_centroid_connectors(
     summary_df["num_connectors"] = summary_df["num_connectors"].fillna(0).astype(int)
     WranglerLogger.debug(f"summary_df:\n{summary_df}")
     WranglerLogger.info(
-        f"num_connectors added per {zone_id_label} (target:{num_centroid_connectors}):\n"
+        f"num_connectors added per zone (target:{num_centroid_connectors}):\n"
         f"{summary_df['num_connectors'].value_counts()}"
     )
 
     # Attach the per-zone count to the centroid nodes. Use .map() rather than pd.merge()
     # so that nodes_df keeps its `model_node_id_idx` primary-key index and its attrs.
-    num_connectors_col = f"{zone_id_label}_num_connectors"
-    road_net.nodes_df[num_connectors_col] = (
+    # combine_first preserves values from a prior call for a different zone type (e.g.
+    # TAZs) instead of this pass's NaNs overwriting them for nodes outside its zone set.
+    num_connectors_col = "zone_num_connectors"
+    new_num_connectors = (
         road_net.nodes_df["model_node_id"]
         .map(summary_df.set_index("zone_id")["num_connectors"])
         .astype("Int64")
     )
+    if num_connectors_col in road_net.nodes_df.columns:
+        new_num_connectors = new_num_connectors.combine_first(
+            road_net.nodes_df[num_connectors_col]
+        ).astype("Int64")
+    road_net.nodes_df[num_connectors_col] = new_num_connectors
     road_net._mark_modified()
     WranglerLogger.debug(f"road_net.nodes_df:\n{road_net.nodes_df}")
     return summary_df
