@@ -115,7 +115,10 @@ def data_to_nodes_df(
 
 
 def _create_nodes_from_link(
-    links_df: DataFrame[RoadLinksTable], link_pos: int, node_key_field: str
+    links_df: DataFrame[RoadLinksTable],
+    link_pos: int,
+    node_key_field: str,
+    merge_duplicates: bool = False,
 ) -> DataFrame[RoadNodesTable]:
     """Creates a basic list of node entries from links, their geometry, and a position.
 
@@ -127,6 +130,9 @@ def _create_nodes_from_link(
             created
         link_pos (int): Position within geometry collection to use for geometry
         node_key_field (str): field name to use for generating index and node key
+        merge_duplicates: if True, average the coordinates of any node entries that
+            share a ``model_node_id`` instead of raising. Duplicates usually indicate
+            an upstream data issue, so this is opt-in. Defaults to False.
 
     Returns:
         DataFrame[RoadNodesTable]
@@ -141,8 +147,18 @@ def _create_nodes_from_link(
     nodes_df["X"] = nodes_df.geometry.x
     nodes_df["Y"] = nodes_df.geometry.y
 
-    nodes_df = _merge_duplicate_nodes_by_average(nodes_df)
+    if merge_duplicates:
+        nodes_df = _merge_duplicate_nodes_by_average(nodes_df)
+    elif nodes_df["model_node_id"].duplicated().any():
+        dupe_ids = nodes_df.loc[nodes_df["model_node_id"].duplicated(), "model_node_id"].unique()
+        msg = (
+            f"Found {len(dupe_ids)} model_node_id(s) with multiple, possibly conflicting, "
+            f"geometries: {sorted(dupe_ids)[:10]}. Pass merge_duplicates=True to average "
+            "their coordinates if this is expected."
+        )
+        raise NodeAddError(msg)
 
+    nodes_df = gpd.GeoDataFrame(nodes_df, geometry="geometry", crs=LAT_LON_CRS)
     nodes_df["model_node_id_idx"] = nodes_df["model_node_id"]
     nodes_df.set_index("model_node_id_idx", inplace=True)
     nodes_df = validate_df_to_model(nodes_df, RoadNodesTable)
