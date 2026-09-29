@@ -898,25 +898,26 @@ def load_scenario(
         name: Optional name for the scenario. Defaults to current datetime.
     """
     scenario_name = name
-    if not isinstance(scenario_data, dict):
-        WranglerLogger.debug(f"Loading Scenario from file: {scenario_data}")
-        scenario_data = load_dict(scenario_data)
-        # use version in file if it exists
-        scenario_name = scenario_data.get("name", scenario_name)
-    else:
+    if isinstance(scenario_data, dict):
         WranglerLogger.debug("Loading Scenario from dict.")
+        scenario_dict = scenario_data
+    else:
+        WranglerLogger.debug(f"Loading Scenario from file: {scenario_data}")
+        scenario_dict = load_dict(scenario_data)
+        # use version in file if it exists
+        scenario_name = scenario_dict.get("name", scenario_name)
 
     base_scenario_data = {
-        "roadway": scenario_data.get("roadway"),
-        "transit": scenario_data.get("transit"),
-        "applied_projects": scenario_data.get("applied_projects", []),
-        "conflicts": scenario_data.get("conflicts", {}),
+        "roadway": scenario_dict.get("roadway"),
+        "transit": scenario_dict.get("transit"),
+        "applied_projects": scenario_dict.get("applied_projects", []),
+        "conflicts": scenario_dict.get("conflicts", {}),
     }
     base_scenario = _load_base_scenario_from_config(
-        base_scenario_data, config=scenario_data["config"]
+        base_scenario_data, config=scenario_dict["config"]
     )
     my_scenario = create_scenario(
-        base_scenario=base_scenario, name=scenario_name, config=scenario_data["config"]
+        base_scenario=base_scenario, name=scenario_name, config=scenario_dict["config"]
     )
     return my_scenario
 
@@ -998,8 +999,9 @@ def extract_base_scenario_metadata(base_scenario: dict) -> dict:
     if isinstance(base_scenario.get("road_net"), RoadwayNetwork):
         nodes_file_path = base_scenario["road_net"].nodes_df.attrs.get("source_file", None)
         if nodes_file_path is not None:
+            nodes_file_path = Path(nodes_file_path)
             out_dict["roadway"] = {
-                "dir": str(Path(nodes_file_path).parent),
+                "dir": str(nodes_file_path.parent),
                 "file_format": str(nodes_file_path.suffix).lstrip("."),
             }
     if isinstance(base_scenario.get("transit_net"), TransitNetwork):
