@@ -889,23 +889,25 @@ def write_applied_projects(scenario: Scenario, out_dir: Path, overwrite: bool = 
 
 def load_scenario(
     scenario_data: dict | Path,
-    name: str = datetime.now().strftime("%Y%m%d%H%M%S"),
+    name: str | None = None,
 ) -> Scenario:
     """Loads a scenario from a file written by Scenario.write() as the base scenario.
 
     Args:
         scenario_data: Scenario data as a dict or path to scenario data file
-        name: Optional name for the scenario. Defaults to current datetime.
+        name: Optional name for the scenario. If not given, uses the name stored in
+            scenario_data if present, otherwise the current datetime. An explicitly
+            provided name always takes precedence over a name found in scenario_data.
     """
-    scenario_name = name
     if isinstance(scenario_data, dict):
         WranglerLogger.debug("Loading Scenario from dict.")
         scenario_dict = scenario_data
     else:
         WranglerLogger.debug(f"Loading Scenario from file: {scenario_data}")
         scenario_dict = load_dict(scenario_data)
-        # use version in file if it exists
-        scenario_name = scenario_dict.get("name", scenario_name)
+
+    # an explicitly passed name wins over the name stored in scenario_data
+    scenario_name = name or scenario_dict.get("name") or datetime.now().strftime("%Y%m%d%H%M%S")
 
     base_scenario_data = {
         "roadway": scenario_dict.get("roadway"),
