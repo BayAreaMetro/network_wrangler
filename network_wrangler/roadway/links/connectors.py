@@ -43,10 +43,10 @@ class FitForCentroidConnection(IntEnum):
     Since the connector will connect to a node, the highest (worst) of this value
     for the links will apply to the node. So if one link is DO_NOT_USE, it won't be used.
 
-    Used by add_centroid_connectors().
+    Used by add_centroid_connectors(), which also sets this value to DO_NOT_USE on the
+    centroid connector links it creates, so they are excluded as candidates by future calls.
     """
 
-    NA_IS_CONNECTOR = 0
     BEST = 1
     GOOD = 2
     OKAY = 3
@@ -122,12 +122,12 @@ def _score_and_filter_candidate_nodes(
     degrees_col = f"{mode}_graph_degrees"
     fit_col = f"{mode}_centroid_fit"
 
-    # Score each node: out-degree and worst fit among its modal out-links.
-    # Exclude links with no {mode}_centroid_fit set (e.g. centroid connectors created by a
-    # prior call for a different zone type) so they don't inflate degree/fit for this pass,
-    # and so previously-created centroid nodes can't leak in as candidates here.
+    # Score each node: out-degree and worst fit among its modal out-links. Centroid connector
+    # links created by a prior call (for this or another zone type) have fit_col explicitly
+    # set to DO_NOT_USE, so they're excluded here and can't leak in as candidates. Treat an
+    # unset fit_col the same way, since there's no basis to consider the link a good fit.
     modal_links_df = road_net.links_df.mode_query(mode)
-    modal_links_df = modal_links_df.loc[modal_links_df[fit_col].notna()]
+    modal_links_df = modal_links_df.fillna({fit_col: FitForCentroidConnection.DO_NOT_USE})
     scores_df = modal_links_df.groupby("A")[fit_col].agg(**{degrees_col: "size", fit_col: "max"})
     scores_df = scores_df[scores_df[fit_col] != FitForCentroidConnection.DO_NOT_USE]
 
@@ -333,6 +333,9 @@ def add_centroid_connectors(
             * All mode variables set to False by default
             * Variables for specified mode set to True (from MODES_TO_NETWORK_LINK_VARIABLES)
             * Example: For mode='drive', sets drive_access=True, bike_access=False, etc.
+        - **{mode}_centroid_fit columns**: Set to DO_NOT_USE for every existing
+            ``{mode}_centroid_fit`` column, so these new connectors are never
+            picked as candidates by a future add_centroid_connectors() call.
         - **Custom attributes**: Any attributes from default_link_attribute_dict parameter
 
     Args:
@@ -396,6 +399,13 @@ def add_centroid_connectors(
 
     for colname, default_value in default_link_attribute_dict.items():
         centroid_links_df[colname] = default_value
+
+    # Explicitly mark these new connectors as DO_NOT_USE for every mode's centroid fitness,
+    # so future add_centroid_connectors() calls never pick them as candidate nodes.
+    for centroid_fit_col in road_net.links_df.columns[
+        road_net.links_df.columns.str.endswith("_centroid_fit")
+    ]:
+        centroid_links_df[centroid_fit_col] = FitForCentroidConnection.DO_NOT_USE
 
     road_net.add_links(centroid_links_df)
     road_net.add_shapes(centroid_links_df)
