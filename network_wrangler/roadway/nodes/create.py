@@ -177,7 +177,7 @@ def _merge_duplicate_nodes_by_average(
     """
     # Keep this as a local threshold for now; if users need to tune it, we can
     # promote it to WranglerConfig (e.g., MODEL_ROADWAY) in a follow-up change.
-    DUPLICATE_NODE_WARN_SPREAD_METERS = 100.0
+    DUPLICATE_NODE_ERROR_SPREAD_METERS = 100.0
     duplicate_nodes = nodes_df[nodes_df.duplicated(subset=["model_node_id"], keep=False)]
     if len(duplicate_nodes) == 0:
         return gpd.GeoDataFrame(nodes_df, geometry="geometry", crs=LAT_LON_CRS)
@@ -190,7 +190,7 @@ def _merge_duplicate_nodes_by_average(
     WranglerLogger.debug(f"Duplicate nodes:\n{duplicate_nodes[['model_node_id', 'X', 'Y']]}")
 
     # Use WEB_MERCATOR_CRS only to measure approximate planar spread in meters
-    # for a warning heuristic. It is globally available and avoids requiring a
+    # for this error threshold check. It is globally available and avoids requiring a
     # region-specific local CRS in this low-stakes diagnostic path.
     dupes_projected = gpd.GeoDataFrame(
         duplicate_nodes, geometry="geometry", crs=LAT_LON_CRS
@@ -203,11 +203,11 @@ def _merge_duplicate_nodes_by_average(
         .apply(lambda geom: geom.apply(lambda g: geom.distance(g).max()).max())
         .astype(float)
     )
-    wide_spread = spread_by_id[spread_by_id > DUPLICATE_NODE_WARN_SPREAD_METERS]
+    wide_spread = spread_by_id[spread_by_id > DUPLICATE_NODE_ERROR_SPREAD_METERS]
     if not wide_spread.empty:
         msg = (
             "Refusing to merge duplicate model_node_id geometries with large spatial spread "
-            f"(>{DUPLICATE_NODE_WARN_SPREAD_METERS:.1f} m) for {len(wide_spread)} nodes, "
+            f"(>{DUPLICATE_NODE_ERROR_SPREAD_METERS:.1f} m) for {len(wide_spread)} nodes, "
             "which almost certainly indicates an upstream data error. "
             f"Largest spreads (m): {wide_spread.sort_values(ascending=False).head(10).to_dict()}"
         )
