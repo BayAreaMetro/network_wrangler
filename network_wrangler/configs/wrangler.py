@@ -220,6 +220,11 @@ class TransitConfig(ConfigItem):
         MAX_SHAPE_CANDIDATE_PATHS: Maximum number of candidate paths to evaluate when doing
             shape-aware routing. Used in
             [`find_shape_aware_shortest_path()`][network_wrangler.utils.transit.find_shape_aware_shortest_path].
+        OFF_ROUTE_DISTANCE_FEET: A point of the original GTFS shape farther than this from the
+            routed path counts as off-route, when the local CRS is in feet. Used for the
+            `leg_off_route_distance` QA column written by
+            [`route_shapes_between_stops()`][network_wrangler.utils.transit.route_shapes_between_stops].
+        OFF_ROUTE_DISTANCE_METERS: As OFF_ROUTE_DISTANCE_FEET, when the local CRS is in meters.
         NEAREST_K_SHAPES_TO_STOPS: Number of nearest shape points to check for each stop.
         FIRST_LAST_SHAPE_STOP_IDX: For loops, the first stop must match one of the first
             FIRST_LAST_SHAPE_STOP_IDX shapes, and the last stop must match one of the last
@@ -236,6 +241,8 @@ class TransitConfig(ConfigItem):
     MIN_SUBSTRING_MATCH_LENGTH: int = 3
     SHAPE_DISTANCE_TOLERANCE: float = 1.10
     MAX_SHAPE_CANDIDATE_PATHS: int = 20
+    OFF_ROUTE_DISTANCE_FEET: float = 500.0
+    OFF_ROUTE_DISTANCE_METERS: float = 150.0
     NEAREST_K_SHAPES_TO_STOPS: int = 20
     FIRST_LAST_SHAPE_STOP_IDX: int = 10
     MAX_DISTANCE_STOP_FEET: float = 528.0  # 0.10 * 5280 FEET_PER_MILE

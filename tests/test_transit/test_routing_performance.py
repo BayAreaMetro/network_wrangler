@@ -32,6 +32,7 @@ used as a realistic end-to-end case.
 from __future__ import annotations
 
 import time
+from types import SimpleNamespace
 
 import geopandas as gpd
 import networkx as nx
@@ -45,6 +46,7 @@ from network_wrangler.logger import WranglerLogger
 from network_wrangler.models.gtfs.types import RouteType
 from network_wrangler.roadway import load_roadway_from_dataframes, load_roadway_from_dir
 from network_wrangler.utils.transit import (
+    _shape_deviation_by_leg,
     _shape_points_index,
     calculate_path_deviation_from_shape,
     find_shape_aware_shortest_path,
@@ -975,3 +977,93 @@ def test_route_shapes_stpaul_matches_reference(monkeypatch, stpaul_routing_case)
     expected = _routed_shapes(stpaul_routing_case, monkeypatch, use_reference=True)
     actual = _routed_shapes(stpaul_routing_case)
     pd.testing.assert_frame_equal(actual, expected)
+
+
+# --------------------------------------------------------------------------------------
+# QA columns comparing each routed leg with its original shape
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("stop_spacing", [4, 1])
+def test_route_shapes_adds_leg_deviation_columns(stop_spacing):
+    """Legs routed along their shape get a shape distance and zero off-route distance.
+
+    A stop_spacing of 1 makes every leg a single link, where consecutive stops are adjacent
+    nodes.
+    """
+    inputs = (grid_roadway_net(20), *grid_bus_feed(20, 5, stop_spacing))
+    shapes = _routed_shapes(inputs)
+
+    n_legs = len(inputs[1])
+    leg_starts = shapes.loc[shapes["leg_shape_distance"].notna()]
+    assert len(leg_starts) == n_legs
+    # set once per leg, on the row of the leg's first stop
+    pd.testing.assert_frame_equal(
+        leg_starts[["shape_id", "stop_id"]].reset_index(drop=True),
+        inputs[1]
+        .sort_values(["shape_id", "stop_sequence"])[["shape_id", "stop_id"]]
+        .reset_index(drop=True),
+        check_dtype=False,
+    )
+    # only set on stop rows, and never on the last stop of a shape
+    assert leg_starts["stop_id"].notna().all()
+    last_stops = shapes.loc[shapes.groupby("shape_id")["shape_pt_sequence"].idxmax()]
+    assert last_stops["leg_shape_distance"].isna().all()
+
+    # each route crosses the 19 cells of its grid row; a cell is GRID_DEG of longitude, in km
+    cell_km = 111.32 * np.cos(np.radians(GRID_LAT0)) * GRID_DEG
+    route_km = leg_starts.groupby("shape_id")["leg_shape_distance"].sum()
+    assert route_km.to_numpy() == pytest.approx(19 * cell_km, rel=0.02)
+    assert leg_starts["leg_shape_distance"].max() == pytest.approx(
+        stop_spacing * cell_km, rel=0.02
+    )
+    assert (leg_starts["leg_off_route_distance"] == 0).all()
+
+
+def test_leg_deviation_measures_shape_away_from_path(grid40):
+    """A path one grid row away from the shape is off-route except near its two ends."""
+    roadway_net, _, node_ids = grid40
+    row, from_col, n_cols = 10, 5, 10
+    _, _, shape_points = _straight_run(node_ids, row, from_col, n_cols)
+    # up one row, along it, and back down: about 220 m from the shape
+    path = [int(node_ids[row, from_col])]
+    path += [int(n) for n in node_ids[row + 1, from_col : from_col + n_cols + 1]]
+    path += [int(node_ids[row, from_col + n_cols])]
+
+    legs = [{"shape_id": "detour", "stop_sequence": 1, "shape_points": shape_points, "path": path}]
+    result = _shape_deviation_by_leg(legs, roadway_net, LOCAL_CRS, CRS_UNITS).iloc[0]
+
+    threshold_km = DefaultConfig.TRANSIT.OFF_ROUTE_DISTANCE_METERS / 1000
+    # the shape is within the threshold of the path only near the two connecting links
+    expected_km = result["leg_shape_distance"] - 2 * threshold_km
+    assert result["leg_off_route_distance"] == pytest.approx(expected_km, abs=0.1)
+    assert result["leg_off_route_distance"] > 0.5 * result["leg_shape_distance"]
+
+
+def test_leg_deviation_follows_link_geometry_not_node_chords():
+    """A shape on a long curved link is on-route though far from the chord between its nodes."""
+    bow = [_grid_point(0, 0), _grid_point(5, 10), _grid_point(0, 20)]  # about 1.1 km off chord
+    links_gdf = gpd.GeoDataFrame(
+        {"A": [1], "B": [2], "distance": [3.5]},
+        geometry=[sg.LineString(bow)],
+        crs="EPSG:4326",
+    )
+    shape_points = pd.DataFrame(
+        {"shape_pt_lon": [p[0] for p in bow], "shape_pt_lat": [p[1] for p in bow]}
+    )
+    legs = [{"shape_id": "bow", "stop_sequence": 1, "shape_points": shape_points, "path": [1, 2]}]
+    result = _shape_deviation_by_leg(
+        legs, SimpleNamespace(links_df=links_gdf), LOCAL_CRS, CRS_UNITS
+    ).iloc[0]
+    assert result["leg_shape_distance"] > 3
+    assert result["leg_off_route_distance"] == 0
+
+
+def test_leg_deviation_is_null_without_shape_points(grid40):
+    """A leg with no original shape points gets null QA values, not an error."""
+    roadway_net, _, node_ids = grid40
+    path = [int(n) for n in node_ids[3, 2:6]]
+    legs = [{"shape_id": "none", "stop_sequence": 1, "shape_points": pd.DataFrame(), "path": path}]
+    result = _shape_deviation_by_leg(legs, roadway_net, LOCAL_CRS, CRS_UNITS).iloc[0]
+    assert np.isnan(result["leg_shape_distance"])
+    assert np.isnan(result["leg_off_route_distance"])

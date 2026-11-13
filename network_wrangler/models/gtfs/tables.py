@@ -274,6 +274,16 @@ class WranglerShapesTable(ShapesTable):
     shape_model_node_id: Series[int] = Field(coerce=True, nullable=False)
     projects: Series[str] = Field(coerce=True, default="")
 
+    # TODO: Should the extra columns that create_feed_from_gtfs_model() attaches to this table
+    # be declared here as optional fields? They pass validation only because this schema is
+    # not strict, so they are written to shapes.txt but are not documented or type-checked:
+    #   - route context: trip_id, direction_id, route_id, agency_id, route_short_name,
+    #     route_type, agency_name
+    #   - stop rows: stop_id, stop_name, stop_sequence
+    #   - stop matching QA: match_distance_feet, poor_match
+    #   - routing QA (see route_shapes_between_stops()): leg_shape_distance,
+    #     leg_off_route_distance
+
 
 class TripsTable(DataFrameModel):
     """Represents the Trips table in the GTFS dataset.

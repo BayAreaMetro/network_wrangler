@@ -8,6 +8,7 @@ import geopandas as gpd
 import networkx as nx
 import numpy as np
 import pandas as pd
+import shapely
 import shapely.geometry
 
 from ..configs import DefaultConfig, WranglerConfig
@@ -1243,6 +1244,126 @@ def create_links_for_failed_bus_paths(  # noqa: PLR0915
     roadway_net.add_shapes(add_links_gdf)
 
 
+def _shape_deviation_by_leg(
+    routed_legs: list[dict],
+    roadway_net: RoadwayNetwork,
+    local_crs: str,
+    crs_units: str,
+) -> pd.DataFrame:
+    """Measure how far each routed stop-to-stop leg strays from its original GTFS shape.
+
+    The original shape segment is sampled at regular spacing and each sample's distance to the
+    routed path is measured in `local_crs`. The path follows true link geometry, not straight
+    lines between nodes, so a long curved link is not mistaken for a deviation.
+
+    Args:
+        routed_legs: one dict per routed leg with keys shape_id, stop_sequence (of the leg's
+            first stop), shape_points (DataFrame with shape_pt_lon and shape_pt_lat, in order)
+            and path (list of model_node_ids from the first stop to the next).
+        roadway_net: RoadwayNetwork whose links_df has A, B, distance and geometry.
+        local_crs: projected coordinate reference system used to measure distances.
+        crs_units: 'feet' or 'meters'.
+
+    Returns:
+        DataFrame with one row per leg and columns shape_id, stop_sequence,
+        leg_shape_distance (length of the original shape segment) and leg_off_route_distance
+        (length of that segment farther than the off-route threshold from the routed path).
+        Distances are in miles when crs_units is 'feet' and kilometers when 'meters', like
+        link distance. They are NaN where the leg has fewer than two shape points, and
+        leg_off_route_distance is also NaN where the path has no links.
+    """
+    columns = ["shape_id", "stop_sequence", "leg_shape_distance", "leg_off_route_distance"]
+    if not routed_legs:
+        return pd.DataFrame(columns=columns)
+
+    if crs_units == "feet":
+        off_route_threshold = DefaultConfig.TRANSIT.OFF_ROUTE_DISTANCE_FEET
+        units_per_distance = FEET_PER_MILE
+    else:
+        off_route_threshold = DefaultConfig.TRANSIT.OFF_ROUTE_DISTANCE_METERS
+        units_per_distance = METERS_PER_KILOMETER
+    sample_spacing = off_route_threshold / 5.0
+
+    # geometry of each link used by any path, projected once; where two links share (A, B)
+    # use the shortest, as the routing graph does
+    path_edges = {
+        edge for leg in routed_legs for edge in zip(leg["path"][:-1], leg["path"][1:], strict=True)
+    }
+    links_gdf = roadway_net.links_df[["A", "B", "distance", "geometry"]]
+    links_gdf = links_gdf.loc[pd.MultiIndex.from_frame(links_gdf[["A", "B"]]).isin(path_edges)]
+    links_gdf = (
+        links_gdf.sort_values("distance").drop_duplicates(subset=["A", "B"]).to_crs(local_crs)
+    )
+    edge_coords = dict(
+        zip(
+            zip(links_gdf["A"], links_gdf["B"], strict=True),
+            [shapely.get_coordinates(geom) for geom in links_gdf.geometry],
+            strict=True,
+        )
+    )
+
+    # project all the original shape points in one call
+    n_points = [len(leg["shape_points"]) for leg in routed_legs]
+    lon_lat = np.concatenate(
+        [
+            leg["shape_points"][["shape_pt_lon", "shape_pt_lat"]].to_numpy(dtype=float)
+            for leg, n in zip(routed_legs, n_points, strict=True)
+            if n > 0
+        ]
+        or [np.empty((0, 2))]
+    )
+    shape_xy = shapely.get_coordinates(
+        gpd.GeoSeries(gpd.points_from_xy(lon_lat[:, 0], lon_lat[:, 1]), crs=LAT_LON_CRS).to_crs(
+            local_crs
+        )
+    )
+    ends = np.cumsum(n_points)
+
+    records = []
+    for leg, n, end in zip(routed_legs, n_points, ends, strict=True):
+        shape_distance = np.nan
+        off_route_distance = np.nan
+        if n >= 2:  # noqa: PLR2004
+            shape_line = shapely.LineString(shape_xy[end - n : end])
+            shape_distance = shape_line.length / units_per_distance
+            edges = list(zip(leg["path"][:-1], leg["path"][1:], strict=True))
+            if shape_line.length > 0 and edges and all(edge in edge_coords for edge in edges):
+                path_line = shapely.LineString(np.vstack([edge_coords[edge] for edge in edges]))
+                n_samples = max(int(shape_line.length // sample_spacing) + 1, 2)
+                samples = shapely.line_interpolate_point(
+                    shape_line, np.linspace(0.0, shape_line.length, n_samples)
+                )
+                off_route_share = (
+                    shapely.distance(samples, path_line) > off_route_threshold
+                ).mean()
+                off_route_distance = off_route_share * shape_distance
+        records.append(
+            {
+                "shape_id": leg["shape_id"],
+                "stop_sequence": leg["stop_sequence"],
+                "leg_shape_distance": shape_distance,
+                "leg_off_route_distance": off_route_distance,
+            }
+        )
+    leg_deviation_df = pd.DataFrame(records, columns=columns)
+
+    distance_units = "miles" if crs_units == "feet" else "km"
+    threshold_str = f"{off_route_threshold:g} {crs_units}"
+    WranglerLogger.info(
+        f"Routed bus legs vs original shapes: "
+        f"{leg_deviation_df['leg_off_route_distance'].sum():,.1f} of "
+        f"{leg_deviation_df['leg_shape_distance'].sum():,.1f} shape {distance_units} are more "
+        f"than {threshold_str} from the routed path, on "
+        f"{(leg_deviation_df['leg_off_route_distance'] > 0).sum():,} of {len(leg_deviation_df):,} legs"
+    )
+    worst_df = leg_deviation_df.loc[leg_deviation_df["leg_off_route_distance"] > 0].nlargest(
+        10, "leg_off_route_distance"
+    )
+    if len(worst_df) > 0:
+        WranglerLogger.info(f"Legs with the most off-route {distance_units}:\n{worst_df}")
+    return leg_deviation_df
+
+
 def route_shapes_between_stops(  # noqa: PLR0912, PLR0915
     bus_stop_links_gdf: gpd.GeoDataFrame,
     feed_tables: dict[str, pd.DataFrame],
@@ -1272,6 +1393,16 @@ def route_shapes_between_stops(  # noqa: PLR0912, PLR0915
     - Adds new shapes with points following road network paths
     - Each shape point has shape_model_node_id from roadway network
     - Stop points retain stop_id, stop_name, stop_sequence
+    - Each stop point that starts a routed leg gets two QA columns comparing the leg's original
+      GTFS shape segment with the routed path (see `_shape_deviation_by_leg()`):
+        - leg_shape_distance: length of the original shape segment to the next stop
+        - leg_off_route_distance: length of that segment farther than
+          `OFF_ROUTE_DISTANCE_FEET` / `OFF_ROUTE_DISTANCE_METERS` from the routed path
+
+      Both are in miles when crs_units is 'feet' and kilometers when 'meters'. They are null
+      on other rows, on legs with no path, and on shapes that are not routed here.
+      Where consecutive stops map to the same node they share one stop point, which holds
+      the values of the later leg.
 
     Args:
         bus_stop_links_gdf: GeoDataFrame of bus stop pairs, required columns:
@@ -1355,6 +1486,8 @@ def route_shapes_between_stops(  # noqa: PLR0912, PLR0915
 
     # collect node sequences for these shapes
     bus_node_sequence = []
+    # collect the original shape points and routed path of each leg, to compare afterwards
+    routed_legs = []
     # also collect failed stop sequences
     no_path_sequence = []
 
@@ -1444,6 +1577,18 @@ def route_shapes_between_stops(  # noqa: PLR0912, PLR0915
                     trace_shape_ids is not None and current_shape_id in trace_shape_ids,
                     node_coords=node_coords,
                     candidate_cache=candidate_cache,
+                )
+                # the leg's first stop is the first point of a shape's first leg; after that
+                # it is the last point added by the previous leg
+                first_stop_row = len(bus_node_sequence) - (current_shape_pt_sequence != 1)
+                routed_legs.append(
+                    {
+                        "shape_id": row["shape_id"],
+                        "stop_sequence": row["stop_sequence"],
+                        "shape_points": original_shape_points,
+                        "path": path,
+                        "first_stop_row": first_stop_row,
+                    }
                 )
             else:
                 # Standard shortest path
@@ -1659,6 +1804,15 @@ def route_shapes_between_stops(  # noqa: PLR0912, PLR0915
             "shape_model_node_id",
         ]
     ]
+    # QA: compare each routed leg with its original shape; set on the leg's first stop point.
+    # Set by row position, not stop_sequence, so it does not depend on the stop labels above.
+    leg_deviation_df = _shape_deviation_by_leg(routed_legs, roadway_net, local_crs, crs_units)
+    first_stop_rows = [leg["first_stop_row"] for leg in routed_legs]
+    for qa_column in ["leg_shape_distance", "leg_off_route_distance"]:
+        bus_node_sequence_df[qa_column] = np.nan
+        bus_node_sequence_df.loc[first_stop_rows, qa_column] = leg_deviation_df[
+            qa_column
+        ].to_numpy(dtype=float)
     # get agency_id, route_short_name, agency_name from existing feed_tables['shapes']
     bus_node_sequence_df = pd.merge(
         left=bus_node_sequence_df,
@@ -3458,6 +3612,8 @@ def create_feed_from_gtfs_model(  # noqa: PLR0912, PLR0915
     - Calls helpers: `get_original_shape_points_between_stops()`,
       `find_shape_aware_shortest_path()`
     - Modifies feed_tables['shapes']: replaces bus route shapes with routed paths
+    - Adds QA columns leg_shape_distance and leg_off_route_distance to feed_tables['shapes'],
+      comparing each routed leg with its original GTFS shape segment
       through road network, adds shape_model_node_id from roadway
 
     **Step 9: Consolidate duplicate stops mapped to same node**
