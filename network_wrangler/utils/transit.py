@@ -1548,7 +1548,6 @@ def route_shapes_between_stops(  # noqa: PLR0912, PLR0915
 
                 bus_node_sequence.append(bus_node_dict)
                 current_shape_pt_sequence += 1
-                last_stop_sequence = row["stop_sequence"]
 
             continue
 
@@ -1623,11 +1622,10 @@ def route_shapes_between_stops(  # noqa: PLR0912, PLR0915
                 elif path_node_id == row["B"]:
                     bus_node_dict["stop_id"] = row["next_stop_id"]
                     bus_node_dict["stop_name"] = row["next_stop_name"]
-                    bus_node_dict["stop_sequence"] = last_stop_sequence + 1
+                    bus_node_dict["stop_sequence"] = row["stop_sequence"] + 1
 
                 bus_node_sequence.append(bus_node_dict)
                 current_shape_pt_sequence += 1
-                last_stop_sequence = row["stop_sequence"]
 
         except nx.NetworkXNoPath as e:
             WranglerLogger.warning(
@@ -1672,7 +1670,6 @@ def route_shapes_between_stops(  # noqa: PLR0912, PLR0915
 
                 bus_node_sequence.append(bus_node_dict)
                 current_shape_pt_sequence += 1
-                last_stop_sequence = row["stop_sequence"]
 
         except nx.NodeNotFound as e:
             WranglerLogger.warning(
@@ -1716,7 +1713,6 @@ def route_shapes_between_stops(  # noqa: PLR0912, PLR0915
 
                 bus_node_sequence.append(bus_node_dict)
                 current_shape_pt_sequence += 1
-                last_stop_sequence = row["stop_sequence"]
 
     bus_node_sequence_df = pd.DataFrame(bus_node_sequence)
     WranglerLogger.debug(f"bus_node_sequence_df:\n{bus_node_sequence_df}")

@@ -1067,3 +1067,30 @@ def test_leg_deviation_is_null_without_shape_points(grid40):
     result = _shape_deviation_by_leg(legs, roadway_net, LOCAL_CRS, CRS_UNITS).iloc[0]
     assert np.isnan(result["leg_shape_distance"])
     assert np.isnan(result["leg_off_route_distance"])
+
+
+@pytest.mark.parametrize("stop_spacing", [4, 1])
+def test_route_shapes_labels_each_stop_point_with_its_stop_sequence(stop_spacing):
+    """Stop points carry their own stop_sequence, including where a leg is a single link."""
+    pairs_gdf, feed_tables = grid_bus_feed(20, 5, stop_spacing)
+    shapes = _routed_shapes((grid_roadway_net(20), pairs_gdf, feed_tables))
+
+    stop_points = shapes.loc[shapes["stop_id"].notna(), ["shape_id", "stop_id", "stop_sequence"]]
+    pairs = pairs_gdf.sort_values(["shape_id", "stop_sequence"])
+    expected = pd.concat(
+        [
+            pairs[["shape_id", "stop_id", "stop_sequence"]],
+            # the last stop of each shape is the next stop of its last leg
+            pairs.groupby("shape_id")
+            .tail(1)
+            .assign(
+                stop_id=lambda df: df["next_stop_id"],
+                stop_sequence=lambda df: df["stop_sequence"] + 1,
+            )[["shape_id", "stop_id", "stop_sequence"]],
+        ]
+    ).sort_values(["shape_id", "stop_sequence"])
+    pd.testing.assert_frame_equal(
+        stop_points.reset_index(drop=True),
+        pd.DataFrame(expected).reset_index(drop=True),
+        check_dtype=False,
+    )
